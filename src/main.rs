@@ -1,3 +1,4 @@
+mod agent;
 mod app;
 
 fn main() -> iced::Result {

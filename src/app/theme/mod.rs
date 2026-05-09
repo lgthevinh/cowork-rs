@@ -5,7 +5,7 @@ use super::CoworkApp;
 pub(super) const WINDOW_SIZE: (f32, f32) = (1100.0, 720.0);
 
 pub(super) fn title(_: &CoworkApp) -> String {
-    String::from("Cowork RS")
+    String::from("NEO Cowork")
 }
 
 pub(super) fn theme(_: &CoworkApp) -> Theme {
