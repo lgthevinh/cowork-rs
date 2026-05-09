@@ -1,7 +1,7 @@
 pub mod record;
 pub mod repo;
-pub mod repo_impl;
 pub mod repo_filter;
+pub mod repo_impl;
 pub mod sqlite_db;
 
 use rusqlite::Connection;

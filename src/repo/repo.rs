@@ -1,5 +1,5 @@
-use anyhow::bail;
 use super::repo_filter::RepoFilter;
+use anyhow::bail;
 
 pub trait Repo<T> {
     fn read_all(&self) -> anyhow::Result<Vec<T>>;
