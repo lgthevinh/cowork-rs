@@ -1,0 +1,16 @@
+[package]
+name = "cowork-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+async-openai = "0.29"
+iced = { version = "0.14.0", features = ["tokio"] }
+jsonschema = "0.46"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+schemars = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
