@@ -40,6 +40,13 @@ cargo fmt
 
 Formats Rust code with `rustfmt`.
 
+```bash
+make build-linux-x86_64
+make build-linux-aarch64
+```
+
+Builds release binaries for Linux x86_64 and Linux ARM64. Install `cross` first for ARM64 with `make install-cross`.
+
 ## Coding Style & Naming Conventions
 
 Use standard Rust formatting with 4-space indentation. Prefer `snake_case` for modules, functions, and fields; `PascalCase` for structs, enums, and traits.
