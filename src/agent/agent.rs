@@ -5,6 +5,7 @@ pub struct Agent {
     id: String,
     name: String,
     system_instruction: String,
+    model: String,
     llm_client: Client<OpenAIConfig>,
     tools: Vec<Box<dyn AgentTool>>,
 }
@@ -14,6 +15,7 @@ impl Agent {
         id: String,
         name: String,
         system_instruction: String,
+        model: String,
         llm_client: Client<OpenAIConfig>,
         tools: Vec<Box<dyn AgentTool>>,
     ) -> Self {
@@ -21,8 +23,29 @@ impl Agent {
             id,
             name,
             system_instruction,
+            model,
             llm_client,
             tools,
         }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn system_instruction(&self) -> &str {
+        &self.system_instruction
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    pub fn llm_client(&self) -> &Client<OpenAIConfig> {
+        &self.llm_client
     }
 }
