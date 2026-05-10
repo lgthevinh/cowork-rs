@@ -9,6 +9,7 @@ pub struct SqliteDb {
 impl SqliteDb {
     pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let conn = Connection::open(path)?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         Ok(Self { conn })
     }
 
