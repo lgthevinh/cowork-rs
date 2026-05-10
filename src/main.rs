@@ -14,9 +14,9 @@ fn main() -> iced::Result {
         .expect("failed to initialize message schema");
 
     // init agent orchestrator
-    let _agent_orchestrator =
+    let agent_orchestrator =
         agent_orchestrator::init().expect("failed to initialize agent orchestrator");
 
     // init ui app
-    app::run()
+    app::run(db, agent_orchestrator)
 }

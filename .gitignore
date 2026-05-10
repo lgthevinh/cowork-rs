@@ -1,2 +1,5 @@
 /target
 data.db
+.env
+.env.*
+!.env.example

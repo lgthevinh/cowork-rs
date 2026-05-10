@@ -7,7 +7,7 @@ pub struct Agent {
     system_instruction: String,
     model: String,
     llm_client: Client<OpenAIConfig>,
-    tools: Vec<Box<dyn AgentTool>>,
+    tools: Vec<Box<dyn AgentTool + Send + Sync>>,
 }
 
 impl Agent {
@@ -17,7 +17,7 @@ impl Agent {
         system_instruction: String,
         model: String,
         llm_client: Client<OpenAIConfig>,
-        tools: Vec<Box<dyn AgentTool>>,
+        tools: Vec<Box<dyn AgentTool + Send + Sync>>,
     ) -> Self {
         Self {
             id,
