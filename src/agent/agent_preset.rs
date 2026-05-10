@@ -9,5 +9,5 @@ pub const DEFAULT_AGENT_PRESET: AgentPreset = AgentPreset {
     id: "default",
     name: "Cowork Agent",
     system_instruction: "You are a helpful cowork agent.",
-    model: "gpt-4.1-mini",
+    model: "mimo-v2.5",
 };
