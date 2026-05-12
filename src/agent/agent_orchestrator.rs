@@ -30,24 +30,6 @@ impl AgentOrchestrator {
         self.agents.first()
     }
 
-    pub async fn chat_completion(&self, user_message: &str) -> anyhow::Result<String> {
-        let agent = self
-            .default_agent()
-            .context("agent orchestrator has no default agent")?;
-
-        let response = agent
-            .call(vec![user_message_request(user_message)?])
-            .await?;
-        let content = response
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|choice| choice.message.content)
-            .unwrap_or_default();
-
-        Ok(content)
-    }
-
     pub async fn chat_completion_stream_response(
         &self,
         messages: Vec<ChatCompletionRequestMessage>,
