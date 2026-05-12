@@ -3,12 +3,12 @@ use async_openai::{
     Client,
     config::OpenAIConfig,
     types::{
-        ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
-        CreateChatCompletionRequestArgs,
+        ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
+        ChatCompletionRequestUserMessageArgs,
     },
 };
 
-use super::agent::Agent;
+use super::agent::{Agent, AgentResponse, AgentStreamCallback};
 use super::agent_preset::DEFAULT_AGENT_PRESET;
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
@@ -35,22 +35,9 @@ impl AgentOrchestrator {
             .default_agent()
             .context("agent orchestrator has no default agent")?;
 
-        let request = CreateChatCompletionRequestArgs::default()
-            .model(agent.model())
-            .messages([
-                ChatCompletionRequestSystemMessageArgs::default()
-                    .content(agent.system_instruction())
-                    .build()?
-                    .into(),
-                ChatCompletionRequestUserMessageArgs::default()
-                    .content(user_message)
-                    .build()?
-                    .into(),
-            ])
-            .build()?;
-
-        let response = agent.llm_client().chat().create(request).await?;
-
+        let response = agent
+            .call(vec![user_message_request(user_message)?])
+            .await?;
         let content = response
             .choices
             .into_iter()
@@ -59,6 +46,18 @@ impl AgentOrchestrator {
             .unwrap_or_default();
 
         Ok(content)
+    }
+
+    pub async fn chat_completion_stream_response(
+        &self,
+        messages: Vec<ChatCompletionRequestMessage>,
+        callback: &dyn AgentStreamCallback,
+    ) -> anyhow::Result<AgentResponse> {
+        let agent = self
+            .default_agent()
+            .context("agent orchestrator has no default agent")?;
+
+        agent.call_stream_response(messages, callback).await
     }
 }
 
@@ -106,4 +105,18 @@ pub fn init() -> anyhow::Result<AgentOrchestrator> {
 
 fn env_or_default(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_owned())
+}
+
+pub fn user_message_request(content: &str) -> anyhow::Result<ChatCompletionRequestMessage> {
+    Ok(ChatCompletionRequestUserMessageArgs::default()
+        .content(content)
+        .build()?
+        .into())
+}
+
+pub fn assistant_message_request(content: &str) -> anyhow::Result<ChatCompletionRequestMessage> {
+    Ok(ChatCompletionRequestAssistantMessageArgs::default()
+        .content(content)
+        .build()?
+        .into())
 }
