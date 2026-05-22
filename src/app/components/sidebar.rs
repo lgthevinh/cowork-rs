@@ -6,7 +6,7 @@ use super::super::{Message, theme};
 pub(in crate::app) fn sidebar() -> Element<'static, Message> {
     container(
         column![
-            text("NEO Cowork").size(28),
+            text("Cowork").size(28),
             text("Workspace").size(16).color(theme::muted_text_color()),
             button("New chat"),
             button("Agents"),

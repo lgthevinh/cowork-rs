@@ -14,7 +14,7 @@ const TEXT: Color = Color::from_rgb8(0x1f, 0x2a, 0x24);
 const MUTED_TEXT: Color = Color::from_rgb8(0x5f, 0x70, 0x66);
 
 pub(super) fn title(_: &CoworkApp) -> String {
-    String::from("NEO Cowork")
+    String::from("Cowork")
 }
 
 pub(super) fn theme(_: &CoworkApp) -> Theme {
