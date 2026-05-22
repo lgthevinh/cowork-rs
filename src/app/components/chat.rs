@@ -2,6 +2,7 @@ use iced::widget::{
     Column, button, column, container, markdown, row, scrollable, text, text_input,
 };
 use iced::{Element, Length, alignment};
+use iced_fonts::octicons;
 
 use super::super::{ChatMessage, ChatMessageKind, Message, theme};
 
@@ -16,16 +17,14 @@ pub(in crate::app) fn chat_area<'a>(
         transcript(messages)
     };
 
-    container(
-        column![
-            scrollable(content).height(Length::Fill),
-            composer(draft, is_waiting_for_agent),
-        ]
-        .spacing(16),
-    )
+    container(column![
+        scrollable(content).height(Length::Fill),
+        composer(draft, is_waiting_for_agent),
+    ])
     .width(Length::Fill)
     .height(Length::Fill)
-    .padding(20)
+    .padding([18, 22])
+    .style(theme::chat_surface)
     .into()
 }
 
@@ -41,12 +40,12 @@ fn transcript(messages: &[ChatMessage]) -> Element<'_, Message> {
 
 fn chat_placeholder<'a>() -> Element<'a, Message> {
     let placeholder = column![
-        text("NEO Cowork").size(20),
-        text("Ask an agent to do something, and the conversation will appear here.")
+        text("Start a session").size(22),
+        text("Ask the agent to plan, write, debug, or inspect local project work.")
             .size(15)
             .color(theme::muted_text_color()),
     ]
-    .spacing(18)
+    .spacing(10)
     .align_x(alignment::Horizontal::Center);
 
     container(placeholder)
@@ -69,8 +68,8 @@ fn user_message(message: &ChatMessage) -> Element<'_, Message> {
         markdown::view(&message.markdown, theme::markdown_settings())
             .map(Message::MarkdownLinkClicked),
     )
-    .max_width(520)
-    .padding([10, 14])
+    .max_width(620)
+    .padding([12, 14])
     .style(theme::user_message_bubble);
 
     let content = column![
@@ -106,8 +105,11 @@ fn agent_message(message: &ChatMessage) -> Element<'_, Message> {
 
     let content = column![
         header,
-        markdown::view(&message.markdown, theme::markdown_settings())
-            .map(Message::MarkdownLinkClicked),
+        container(
+            markdown::view(&message.markdown, theme::markdown_settings())
+                .map(Message::MarkdownLinkClicked),
+        )
+        .padding([2, 0]),
     ]
     .spacing(12);
 
@@ -124,19 +126,36 @@ fn centered_transcript_lane<'a>(
 
 fn composer(draft: &str, is_waiting_for_agent: bool) -> Element<'_, Message> {
     let send_button = if is_waiting_for_agent {
-        button("Sending...")
+        button(icon_label(octicons::clock().size(14), "Waiting"))
+    } else if draft.trim().is_empty() {
+        button(icon_label(octicons::paper_airplane().size(14), "Send"))
     } else {
-        button("Send").on_press(Message::Send)
+        button(icon_label(octicons::paper_airplane().size(14), "Send")).on_press(Message::Send)
     };
 
-    row![
-        text_input("Ask an agent to do something...", draft)
-            .on_input(Message::DraftChanged)
-            .on_submit(Message::Send)
-            .padding(12)
-            .size(16),
-        send_button.padding(12),
-    ]
-    .spacing(10)
+    container(
+        row![
+            text_input("Ask the agent to work on something...", draft)
+                .on_input(Message::DraftChanged)
+                .on_submit(Message::Send)
+                .padding(12)
+                .size(15),
+            send_button.padding([12, 16]),
+        ]
+        .spacing(10)
+        .align_y(alignment::Vertical::Center),
+    )
+    .width(Length::Fill)
+    .padding(10)
+    .style(theme::composer)
     .into()
+}
+
+fn icon_label<'a>(icon: impl Into<Element<'a, Message>>, label: &'a str) -> Element<'a, Message> {
+    let icon = icon.into();
+
+    row![icon, text(label).size(14)]
+        .spacing(8)
+        .align_y(alignment::Vertical::Center)
+        .into()
 }
