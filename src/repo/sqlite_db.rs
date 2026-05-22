@@ -21,14 +21,6 @@ impl SqliteDb {
         Ok(())
     }
 
-    pub fn init_records(&self, create_table_sql: &[&str]) -> anyhow::Result<()> {
-        for sql in create_table_sql {
-            self.conn.execute_batch(sql)?;
-        }
-
-        Ok(())
-    }
-
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
