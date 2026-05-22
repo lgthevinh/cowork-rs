@@ -8,7 +8,11 @@ pub(in crate::app) fn settings_dialog<'a>(
     active_tab: SettingsTab,
     session_model: &'a str,
     message_count: usize,
+    db_path: String,
     is_icon_font_loaded: bool,
+    is_emoji_font_loaded: bool,
+    emoji_font_path: Option<String>,
+    emoji_font_error: Option<String>,
     is_waiting_for_agent: bool,
 ) -> Element<'a, Message> {
     let dialog = container(row![
@@ -17,7 +21,11 @@ pub(in crate::app) fn settings_dialog<'a>(
             active_tab,
             session_model,
             message_count,
+            db_path,
             is_icon_font_loaded,
+            is_emoji_font_loaded,
+            emoji_font_path,
+            emoji_font_error,
             is_waiting_for_agent
         ),
     ])
@@ -103,14 +111,23 @@ fn settings_content<'a>(
     active_tab: SettingsTab,
     session_model: &'a str,
     message_count: usize,
+    db_path: String,
     is_icon_font_loaded: bool,
+    is_emoji_font_loaded: bool,
+    emoji_font_path: Option<String>,
+    emoji_font_error: Option<String>,
     is_waiting_for_agent: bool,
 ) -> Element<'a, Message> {
     let content = match active_tab {
-        SettingsTab::General => general_tab(is_icon_font_loaded),
+        SettingsTab::General => general_tab(
+            is_icon_font_loaded,
+            is_emoji_font_loaded,
+            emoji_font_path,
+            emoji_font_error,
+        ),
         SettingsTab::Agent => agent_tab(session_model, is_waiting_for_agent),
         SettingsTab::Tools => tools_tab(),
-        SettingsTab::Storage => storage_tab(message_count),
+        SettingsTab::Storage => storage_tab(message_count, db_path),
     };
 
     container(column![settings_header(active_tab), content].spacing(18))
@@ -139,8 +156,13 @@ fn settings_header(active_tab: SettingsTab) -> Element<'static, Message> {
     .into()
 }
 
-fn general_tab<'a>(is_icon_font_loaded: bool) -> Element<'a, Message> {
-    settings_panel(vec![
+fn general_tab<'a>(
+    is_icon_font_loaded: bool,
+    is_emoji_font_loaded: bool,
+    emoji_font_path: Option<String>,
+    emoji_font_error: Option<String>,
+) -> Element<'a, Message> {
+    let mut rows = vec![
         detail_row("Theme", "System default"),
         detail_row("Window", "Desktop app"),
         detail_row("Configuration", "Environment variables"),
@@ -152,7 +174,26 @@ fn general_tab<'a>(is_icon_font_loaded: bool) -> Element<'a, Message> {
                 "Octicons loading"
             },
         ),
-    ])
+        detail_row(
+            "Emoji font",
+            if is_emoji_font_loaded {
+                "Loaded"
+            } else {
+                "Not loaded"
+            },
+        ),
+        detail_row("Emoji probe", "✅ 🚀 😀 ⚠️ 🛠️"),
+    ];
+
+    if let Some(path) = emoji_font_path {
+        rows.push(detail_row("Emoji font file", path));
+    }
+
+    if let Some(error) = emoji_font_error {
+        rows.push(detail_row("Emoji font error", error));
+    }
+
+    settings_panel(rows)
 }
 
 fn agent_tab<'a>(session_model: &'a str, is_waiting_for_agent: bool) -> Element<'a, Message> {
@@ -181,9 +222,16 @@ fn tools_tab<'a>() -> Element<'a, Message> {
     ])
 }
 
-fn storage_tab<'a>(message_count: usize) -> Element<'a, Message> {
+fn storage_tab<'a>(message_count: usize, db_path: String) -> Element<'a, Message> {
+    let directory = std::path::Path::new(&db_path)
+        .parent()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| String::from("."));
+
     settings_panel(vec![
         detail_row("Storage", "SQLite local"),
+        detail_row("Database file", db_path),
+        detail_row("Directory", directory),
         detail_row("Current messages", message_count.to_string()),
         detail_row("Session loading", "Planned"),
     ])

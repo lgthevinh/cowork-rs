@@ -12,6 +12,7 @@ use iced::futures::{SinkExt, channel::mpsc};
 use iced::widget::{button, column, container, markdown, row, stack, text};
 use iced::{Element, Length, Task, alignment, application, font, stream};
 use iced_fonts::{OCTICONS_FONT_BYTES, octicons};
+use std::path::PathBuf;
 
 use crate::agent::{
     agent::AgentStreamCallback,
@@ -28,6 +29,22 @@ use crate::repo::repo_impl::{MessageRepo, SessionRepo};
 
 const INITIAL_RECENT_SESSION_COUNT: usize = 5;
 const RECENT_SESSION_PAGE_SIZE: usize = 5;
+const EMOJI_FONT_ENV: &str = "COWORK_EMOJI_FONT";
+const EMOJI_FONT_CANDIDATES: &[&str] = &[
+    "assets/fonts/emoji.ttf",
+    "assets/fonts/emoji.otf",
+    "assets/fonts/NotoEmoji-Regular.ttf",
+    "assets/fonts/NotoColorEmoji.ttf",
+    "assets/fonts/Noto-COLRv1.ttf",
+    "assets/fonts/TwemojiMozilla.ttf",
+    "/usr/share/fonts/google-noto-emoji-fonts/NotoEmoji-Regular.ttf",
+    "/usr/share/fonts/google-noto-color-emoji-fonts/Noto-COLRv1.ttf",
+    "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+    "/usr/share/fonts/noto/NotoEmoji-Regular.ttf",
+    "/usr/share/fonts/noto/NotoColorEmoji.ttf",
+];
+pub(super) const EMOJI_FONT: iced::Font = iced::Font::with_name("Noto Emoji");
 
 pub fn run(db: SqliteDb, agent_orchestrator: AgentOrchestrator) -> iced::Result {
     let db = Rc::new(db);
@@ -56,6 +73,8 @@ pub(super) enum Message {
     CloseSettings,
     SettingsTabSelected(SettingsTab),
     IconFontLoaded(Result<(), font::Error>),
+    EmojiFontBytesLoaded(Result<(String, Vec<u8>), String>),
+    EmojiFontLoaded(String, Result<(), font::Error>),
     Send,
     ChatStreamToken(String),
     ChatStreamCompleted(String),
@@ -98,6 +117,7 @@ pub(super) struct ChatMessage {
     pub(super) author: String,
     body: String,
     pub(super) markdown: Vec<markdown::Item>,
+    pub(super) blocks: Vec<ChatMessageBlock>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +125,33 @@ pub(super) enum ChatMessageKind {
     Assistant,
     System,
     User,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum ChatMessageBlock {
+    Markdown {
+        source: String,
+        markdown: Vec<markdown::Item>,
+    },
+    Icon {
+        icon: ChatIcon,
+        source: String,
+        markdown: Vec<markdown::Item>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ChatIcon {
+    Alert,
+    Check,
+    Code,
+    Info,
+    Link,
+    Rocket,
+    Star,
+    Tools,
+    X,
+    Zap,
 }
 
 impl ChatMessage {
@@ -128,17 +175,20 @@ impl ChatMessage {
             author: author.into(),
             body: body.clone(),
             markdown: markdown::parse(&body).collect(),
+            blocks: parse_chat_blocks(&body),
         }
     }
 
     fn append_body(&mut self, token: &str) {
         self.body.push_str(token);
         self.markdown = markdown::parse(&self.body).collect();
+        self.blocks = parse_chat_blocks(&self.body);
     }
 
     fn set_body(&mut self, body: impl Into<String>) {
         self.body = body.into();
         self.markdown = markdown::parse(&self.body).collect();
+        self.blocks = parse_chat_blocks(&self.body);
     }
 
     pub(super) fn body(&self) -> &str {
@@ -148,6 +198,7 @@ impl ChatMessage {
 
 struct CoworkApp {
     db: Rc<SqliteDb>,
+    db_path: PathBuf,
     agent_orchestrator: Arc<AgentOrchestrator>,
     session_id: String,
     session_title: String,
@@ -160,6 +211,9 @@ struct CoworkApp {
     is_settings_open: bool,
     settings_tab: SettingsTab,
     is_icon_font_loaded: bool,
+    is_emoji_font_loaded: bool,
+    emoji_font_path: Option<String>,
+    emoji_font_error: Option<String>,
     messages: Vec<ChatMessage>,
     streaming_assistant_index: Option<usize>,
     is_waiting_for_agent: bool,
@@ -174,8 +228,10 @@ impl CoworkApp {
             .default_agent()
             .map(|agent| agent.model().to_owned())
             .unwrap_or_else(|| String::from("unknown"));
+        let db_path = db.resolved_path();
 
         let mut app = Self {
+            db_path,
             db,
             agent_orchestrator,
             session_id,
@@ -189,6 +245,9 @@ impl CoworkApp {
             is_settings_open: false,
             settings_tab: SettingsTab::Agent,
             is_icon_font_loaded: false,
+            is_emoji_font_loaded: false,
+            emoji_font_path: None,
+            emoji_font_error: None,
             messages: Vec::new(),
             streaming_assistant_index: None,
             is_waiting_for_agent: false,
@@ -208,7 +267,10 @@ impl CoworkApp {
 
         (
             app,
-            font::load(OCTICONS_FONT_BYTES).map(Message::IconFontLoaded),
+            Task::batch([
+                font::load(OCTICONS_FONT_BYTES).map(Message::IconFontLoaded),
+                Task::perform(load_emoji_font_bytes(), Message::EmojiFontBytesLoaded),
+            ]),
         )
     }
 
@@ -268,6 +330,36 @@ impl CoworkApp {
                     self.messages.push(ChatMessage::system(format!(
                         "Failed to load Octicons font: {error:?}"
                     )));
+                }
+
+                Task::none()
+            }
+            Message::EmojiFontBytesLoaded(result) => match result {
+                Ok((path, bytes)) => {
+                    self.emoji_font_path = Some(path.clone());
+                    self.emoji_font_error = None;
+                    font::load(bytes)
+                        .map(move |result| Message::EmojiFontLoaded(path.clone(), result))
+                }
+                Err(error) => {
+                    self.is_emoji_font_loaded = false;
+                    self.emoji_font_path = None;
+                    self.emoji_font_error = Some(error);
+                    Task::none()
+                }
+            },
+            Message::EmojiFontLoaded(path, result) => {
+                self.is_emoji_font_loaded = result.is_ok();
+
+                match result {
+                    Ok(()) => {
+                        self.emoji_font_path = Some(path);
+                        self.emoji_font_error = None;
+                    }
+                    Err(error) => {
+                        self.emoji_font_path = Some(path);
+                        self.emoji_font_error = Some(format!("{error:?}"));
+                    }
                 }
 
                 Task::none()
@@ -606,7 +698,11 @@ impl CoworkApp {
                     self.settings_tab,
                     &self.session_model,
                     self.messages.len(),
+                    self.db_path.display().to_string(),
                     self.is_icon_font_loaded,
+                    self.is_emoji_font_loaded,
+                    self.emoji_font_path.clone(),
+                    self.emoji_font_error.clone(),
                     self.is_waiting_for_agent
                 ),
             ]
@@ -669,6 +765,79 @@ fn chat_message_from_record(record: MessageRecord) -> ChatMessage {
         MESSAGE_ROLE_SYSTEM => ChatMessage::system(record.content),
         MESSAGE_ROLE_TOOL => ChatMessage::system(format!("Tool\n\n{}", record.content)),
         _ => ChatMessage::system(record.content),
+    }
+}
+
+fn parse_chat_blocks(body: &str) -> Vec<ChatMessageBlock> {
+    let mut blocks = Vec::new();
+    let mut markdown_chunk = String::new();
+
+    for line in body.lines() {
+        if let Some((icon, rest)) = parse_icon_line(line) {
+            push_markdown_block(&mut blocks, &mut markdown_chunk);
+            blocks.push(ChatMessageBlock::Icon {
+                icon,
+                source: rest.trim().to_owned(),
+                markdown: markdown::parse(rest.trim()).collect(),
+            });
+        } else {
+            markdown_chunk.push_str(line);
+            markdown_chunk.push('\n');
+        }
+    }
+
+    push_markdown_block(&mut blocks, &mut markdown_chunk);
+
+    if blocks.is_empty() {
+        blocks.push(ChatMessageBlock::Markdown {
+            source: body.to_owned(),
+            markdown: markdown::parse(body).collect(),
+        });
+    }
+
+    blocks
+}
+
+fn push_markdown_block(blocks: &mut Vec<ChatMessageBlock>, markdown_chunk: &mut String) {
+    if markdown_chunk.trim().is_empty() {
+        markdown_chunk.clear();
+        return;
+    }
+
+    blocks.push(ChatMessageBlock::Markdown {
+        source: markdown_chunk.trim().to_owned(),
+        markdown: markdown::parse(markdown_chunk.trim()).collect(),
+    });
+    markdown_chunk.clear();
+}
+
+fn parse_icon_line(line: &str) -> Option<(ChatIcon, &str)> {
+    let trimmed = line.trim_start();
+
+    if let Some(rest) = trimmed.strip_prefix("[icon:") {
+        let (name, rest) = rest.split_once(']')?;
+        return chat_icon_from_name(name).map(|icon| (icon, rest));
+    }
+
+    let rest = trimmed.strip_prefix(':')?;
+    let (name, rest) = rest.split_once(':')?;
+
+    chat_icon_from_name(name).map(|icon| (icon, rest))
+}
+
+fn chat_icon_from_name(name: &str) -> Option<ChatIcon> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "alert" | "error" | "warning" => Some(ChatIcon::Alert),
+        "check" | "success" | "done" => Some(ChatIcon::Check),
+        "code" | "file_code" => Some(ChatIcon::Code),
+        "info" | "note" => Some(ChatIcon::Info),
+        "link" | "external" | "link_external" => Some(ChatIcon::Link),
+        "rocket" => Some(ChatIcon::Rocket),
+        "star" => Some(ChatIcon::Star),
+        "tool" | "tools" => Some(ChatIcon::Tools),
+        "x" | "close" | "failed" => Some(ChatIcon::X),
+        "zap" | "bolt" => Some(ChatIcon::Zap),
+        _ => None,
     }
 }
 
@@ -738,4 +907,31 @@ fn normalized_visible_session_count(current: usize, total: usize) -> usize {
     } else {
         current.clamp(INITIAL_RECENT_SESSION_COUNT, total)
     }
+}
+
+async fn load_emoji_font_bytes() -> Result<(String, Vec<u8>), String> {
+    let mut candidates = Vec::new();
+
+    if let Ok(path) = std::env::var(EMOJI_FONT_ENV) {
+        if !path.trim().is_empty() {
+            candidates.push(PathBuf::from(path));
+        }
+    }
+
+    candidates.extend(EMOJI_FONT_CANDIDATES.iter().map(PathBuf::from));
+
+    for path in candidates {
+        if !path.is_file() {
+            continue;
+        }
+
+        let bytes = std::fs::read(&path)
+            .map_err(|error| format!("failed to read emoji font {}: {error}", path.display()))?;
+
+        return Ok((path.display().to_string(), bytes));
+    }
+
+    Err(format!(
+        "no emoji font found; set {EMOJI_FONT_ENV} to a .ttf or .otf emoji font"
+    ))
 }

@@ -234,10 +234,61 @@ pub(in crate::app) fn user_message_bubble(_: &Theme) -> container::Style {
     }
 }
 
+pub(in crate::app) fn assistant_message_body(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(Color { a: 0.0, ..PANEL })),
+        border: Border {
+            width: 1.0,
+            radius: 8.0.into(),
+            color: Color { a: 0.0, ..BORDER },
+        },
+        ..container::Style::default()
+    }
+}
+
+pub(in crate::app) fn system_message_body(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(Color::from_rgb8(0xff, 0xf7, 0xe8))),
+        border: Border {
+            width: 1.0,
+            radius: 8.0.into(),
+            color: Color::from_rgb8(0xe8, 0xc9, 0x8a),
+        },
+        ..container::Style::default()
+    }
+}
+
+pub(in crate::app) fn inline_icon_badge(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(USER_BUBBLE)),
+        border: Border {
+            width: 1.0,
+            radius: 7.0.into(),
+            color: BORDER,
+        },
+        ..container::Style::default()
+    }
+}
+
 pub(in crate::app) fn agent_avatar(_: &Theme) -> container::Style {
     container::Style {
         text_color: Some(Color::WHITE),
         background: Some(Background::Color(ACCENT)),
+        border: Border {
+            radius: 7.0.into(),
+            ..Border::default()
+        },
+        ..container::Style::default()
+    }
+}
+
+pub(in crate::app) fn system_avatar(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(Color::WHITE),
+        background: Some(Background::Color(Color::from_rgb8(0xb7, 0x7e, 0x33))),
         border: Border {
             radius: 7.0.into(),
             ..Border::default()
@@ -295,6 +346,10 @@ pub(in crate::app) fn quiet_button(_: &Theme, status: button::Status) -> button:
 
 pub(in crate::app) fn muted_text_color() -> Color {
     MUTED_TEXT
+}
+
+pub(in crate::app) fn warning_text_color() -> Color {
+    Color::from_rgb8(0x8a, 0x5a, 0x20)
 }
 
 fn soft_white_green() -> Theme {
