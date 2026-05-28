@@ -9,6 +9,8 @@ use super::super::{
     ChatIcon, ChatMessage, ChatMessageBlock, ChatMessageKind, EMOJI_FONT, Message, theme,
 };
 
+pub(in crate::app) const TRANSCRIPT_SCROLLABLE_ID: &str = "chat-transcript";
+
 pub(in crate::app) fn chat_area<'a>(
     messages: &'a [ChatMessage],
     draft: &'a str,
@@ -21,7 +23,9 @@ pub(in crate::app) fn chat_area<'a>(
     };
 
     container(column![
-        scrollable(content).height(Length::Fill),
+        scrollable(content)
+            .id(TRANSCRIPT_SCROLLABLE_ID)
+            .height(Length::Fill),
         composer(draft, is_waiting_for_agent),
     ])
     .width(Length::Fill)
@@ -62,7 +66,9 @@ fn chat_placeholder<'a>() -> Element<'a, Message> {
 fn message_row(message: &ChatMessage) -> Element<'_, Message> {
     match message.kind {
         ChatMessageKind::User => user_message(message),
-        ChatMessageKind::Assistant | ChatMessageKind::System => agent_message(message),
+        ChatMessageKind::Assistant | ChatMessageKind::System | ChatMessageKind::Tool => {
+            agent_message(message)
+        }
     }
 }
 
@@ -88,16 +94,20 @@ fn agent_message(message: &ChatMessage) -> Element<'_, Message> {
         ChatMessageKind::System => octicons::alert().size(14),
         ChatMessageKind::Assistant => octicons::hubot().size(14),
         ChatMessageKind::User => octicons::person().size(14),
+        ChatMessageKind::Tool => octicons::tools().size(14),
     };
-    let is_system = message.kind == ChatMessageKind::System;
-    let body_style = if is_system {
-        theme::system_message_body
-    } else {
-        theme::assistant_message_body
+    let body_style = match message.kind {
+        ChatMessageKind::System => theme::system_message_body,
+        ChatMessageKind::Tool => theme::tool_message_body,
+        _ => theme::assistant_message_body,
     };
+    let is_emphasized = matches!(
+        message.kind,
+        ChatMessageKind::System | ChatMessageKind::Tool
+    );
 
     let content = column![
-        message_header(icon, &message.author, is_system),
+        message_header(icon, &message.author, is_emphasized),
         container(message_blocks(&message.blocks))
             .padding([12, 14])
             .style(body_style),

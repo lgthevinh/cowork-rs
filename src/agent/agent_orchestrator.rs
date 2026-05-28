@@ -10,6 +10,8 @@ use async_openai::{
 
 use super::agent::{Agent, AgentResponse, AgentStreamCallback};
 use super::agent_preset::DEFAULT_AGENT_PRESET;
+use super::agent_tool::AgentTool;
+use super::tool::builtin::time_tool::GetCurrentTimeTool;
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
@@ -73,13 +75,16 @@ pub fn init() -> anyhow::Result<AgentOrchestrator> {
         .with_api_base(config.openai_base_url);
     let llm_client = Client::with_config(openai_config);
 
+    let tools: Vec<Box<dyn AgentTool + Send + Sync>> =
+        vec![Box::new(GetCurrentTimeTool)];
+
     let default_agent = Agent::new(
         DEFAULT_AGENT_PRESET.id.to_owned(),
         DEFAULT_AGENT_PRESET.name.to_owned(),
         DEFAULT_AGENT_PRESET.system_instruction.to_owned(),
         DEFAULT_AGENT_PRESET.model.to_owned(),
         llm_client,
-        vec![],
+        tools,
     );
 
     Ok(AgentOrchestrator::new(vec![default_agent]))

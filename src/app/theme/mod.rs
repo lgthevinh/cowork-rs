@@ -260,6 +260,19 @@ pub(in crate::app) fn system_message_body(_: &Theme) -> container::Style {
     }
 }
 
+pub(in crate::app) fn tool_message_body(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(Color::from_rgb8(0xef, 0xf1, 0xf5))),
+        border: Border {
+            width: 1.0,
+            radius: 8.0.into(),
+            color: Color::from_rgb8(0xc8, 0xcd, 0xd6),
+        },
+        ..container::Style::default()
+    }
+}
+
 pub(in crate::app) fn inline_icon_badge(_: &Theme) -> container::Style {
     container::Style {
         text_color: Some(TEXT),

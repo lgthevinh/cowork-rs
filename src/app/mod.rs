@@ -9,7 +9,7 @@ use std::sync::{
 
 use async_openai::types::{ChatCompletionRequestMessage, CompletionUsage};
 use iced::futures::{SinkExt, channel::mpsc};
-use iced::widget::{button, column, container, markdown, row, stack, text};
+use iced::widget::{button, column, container, markdown, operation, row, stack, text};
 use iced::{Element, Length, Task, alignment, application, font, stream};
 use iced_fonts::{OCTICONS_FONT_BYTES, octicons};
 use std::path::PathBuf;
@@ -80,6 +80,8 @@ pub(super) enum Message {
     ChatStreamCompleted(String),
     ChatStreamFailed(String),
     ChatStreamUsage(CompletionUsage),
+    ToolCallStarted { tool_name: String, arguments: String },
+    ToolCallCompleted { tool_name: String, result: String },
     MarkdownLinkClicked(markdown::Uri),
 }
 
@@ -124,6 +126,7 @@ pub(super) struct ChatMessage {
 pub(super) enum ChatMessageKind {
     Assistant,
     System,
+    Tool,
     User,
 }
 
@@ -165,6 +168,10 @@ impl ChatMessage {
 
     fn user(body: impl Into<String>) -> Self {
         Self::new(ChatMessageKind::User, "You", body)
+    }
+
+    fn tool(tool_name: &str, body: impl Into<String>) -> Self {
+        Self::new(ChatMessageKind::Tool, tool_name, body)
     }
 
     fn new(kind: ChatMessageKind, author: impl Into<String>, body: impl Into<String>) -> Self {
@@ -407,23 +414,26 @@ impl CoworkApp {
                 self.messages.push(ChatMessage::assistant(String::new()));
                 self.streaming_assistant_index = Some(self.messages.len() - 1);
 
-                Task::stream(stream::channel(100, async move |output| {
-                    let callback = UiAgentStreamCallback::new(output);
+                Task::batch([
+                    Task::stream(stream::channel(100, async move |output| {
+                        let callback = UiAgentStreamCallback::new(output);
 
-                    if let Err(error) = agent_orchestrator
-                        .chat_completion_stream_response(request_messages, &callback)
-                        .await
-                    {
-                        callback.on_error(&error).await;
-                    }
-                }))
+                        if let Err(error) = agent_orchestrator
+                            .chat_completion_stream_response(request_messages, &callback)
+                            .await
+                        {
+                            callback.on_error(&error).await;
+                        }
+                    })),
+                    scroll_to_bottom(),
+                ])
             }
             Message::ChatStreamToken(token) => {
                 if let Some(message) = self.streaming_assistant_message_mut() {
                     message.append_body(&token);
                 }
 
-                Task::none()
+                scroll_to_bottom()
             }
             Message::ChatStreamCompleted(full_text) => {
                 self.is_waiting_for_agent = false;
@@ -454,7 +464,7 @@ impl CoworkApp {
                 }
                 self.refresh_recent_sessions();
 
-                Task::none()
+                scroll_to_bottom()
             }
             Message::ChatStreamFailed(error) => {
                 self.is_waiting_for_agent = false;
@@ -468,6 +478,35 @@ impl CoworkApp {
             Message::ChatStreamUsage(usage) => {
                 let _usage = usage;
                 Task::none()
+            }
+            Message::ToolCallStarted { tool_name, .. } => {
+                if let Some(index) = self.streaming_assistant_index {
+                    if let Some(message) = self.messages.get_mut(index) {
+                        message.kind = ChatMessageKind::Tool;
+                        message.author = tool_name.clone();
+                        message.set_body(format!(":tools: Calling tool `{tool_name}`..."));
+                    }
+                    self.messages.push(ChatMessage::assistant(String::new()));
+                    self.streaming_assistant_index = Some(self.messages.len() - 1);
+                }
+                scroll_to_bottom()
+            }
+            Message::ToolCallCompleted { tool_name, result } => {
+                if let Some(index) = self.streaming_assistant_index {
+                    if index > 0 {
+                        if let Some(tool_msg) = self.messages.get_mut(index - 1) {
+                            if tool_msg.kind == ChatMessageKind::Tool {
+                                let display = if result.len() > 200 {
+                                    format!(":check: `{tool_name}` → {}...", &result[..200])
+                                } else {
+                                    format!(":check: `{tool_name}` → {result}")
+                                };
+                                tool_msg.set_body(display);
+                            }
+                        }
+                    }
+                }
+                scroll_to_bottom()
             }
             Message::MarkdownLinkClicked(uri) => {
                 let _clicked_uri = uri;
@@ -663,7 +702,7 @@ impl CoworkApp {
                         message.body(),
                     )?);
                 }
-                ChatMessageKind::System => {}
+                ChatMessageKind::System | ChatMessageKind::Tool => {}
             }
         }
 
@@ -763,7 +802,7 @@ fn chat_message_from_record(record: MessageRecord) -> ChatMessage {
         MESSAGE_ROLE_ASSISTANT => ChatMessage::assistant(record.content),
         MESSAGE_ROLE_USER => ChatMessage::user(record.content),
         MESSAGE_ROLE_SYSTEM => ChatMessage::system(record.content),
-        MESSAGE_ROLE_TOOL => ChatMessage::system(format!("Tool\n\n{}", record.content)),
+        MESSAGE_ROLE_TOOL => ChatMessage::tool("Tool", record.content),
         _ => ChatMessage::system(record.content),
     }
 }
@@ -881,6 +920,26 @@ impl AgentStreamCallback for UiAgentStreamCallback {
     async fn on_usage(&self, usage: &CompletionUsage) {
         self.send(Message::ChatStreamUsage(usage.clone())).await;
     }
+
+    async fn on_tool_start(&self, tool_name: &str, arguments: &str) {
+        self.send(Message::ToolCallStarted {
+            tool_name: tool_name.to_owned(),
+            arguments: arguments.to_owned(),
+        })
+        .await;
+    }
+
+    async fn on_tool_result(&self, tool_name: &str, result: &str) {
+        self.send(Message::ToolCallCompleted {
+            tool_name: tool_name.to_owned(),
+            result: result.to_owned(),
+        })
+        .await;
+    }
+}
+
+fn scroll_to_bottom() -> Task<Message> {
+    operation::snap_to_end(components::TRANSCRIPT_SCROLLABLE_ID)
 }
 
 fn now_millis() -> i64 {

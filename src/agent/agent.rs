@@ -3,13 +3,18 @@ use async_openai::{
     Client,
     config::OpenAIConfig,
     types::{
-        ChatCompletionMessageToolCallChunk, ChatCompletionRequestMessage,
-        ChatCompletionRequestSystemMessageArgs, ChatCompletionStreamOptions, CompletionUsage,
+        ChatCompletionMessageToolCall, ChatCompletionMessageToolCallChunk,
+        ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
+        ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
+        ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolType, CompletionUsage,
         CreateChatCompletionRequest, CreateChatCompletionRequestArgs, CreateChatCompletionResponse,
-        FinishReason,
+        FinishReason, FunctionCall, FunctionObject,
     },
 };
 use futures_util::StreamExt;
+use std::collections::BTreeMap;
+
+const MAX_TOOL_ITERATIONS: usize = 10;
 
 #[derive(Debug, Clone, Default)]
 pub struct AgentResponse {
@@ -25,6 +30,8 @@ pub trait AgentStreamCallback: Send + Sync {
     async fn on_complete(&self, full_text: &str);
     async fn on_error(&self, error: &anyhow::Error);
     async fn on_usage(&self, usage: &CompletionUsage);
+    async fn on_tool_start(&self, tool_name: &str, arguments: &str);
+    async fn on_tool_result(&self, tool_name: &str, result: &str);
 }
 
 pub struct Agent {
@@ -96,10 +103,64 @@ impl Agent {
 
     pub async fn call_stream_response(
         &self,
-        messages: Vec<ChatCompletionRequestMessage>,
+        mut messages: Vec<ChatCompletionRequestMessage>,
         callback: &dyn AgentStreamCallback,
     ) -> anyhow::Result<AgentResponse> {
-        let request = self.build_request(messages, true)?;
+        let mut final_response = AgentResponse::default();
+
+        for _ in 0..MAX_TOOL_ITERATIONS {
+            let response = self.stream_once(&messages, callback).await?;
+
+            match response.finish_reason {
+                Some(FinishReason::ToolCalls) => {
+                    let tool_calls = merge_tool_call_chunks(&response.tool_calls);
+
+                    let assistant_msg =
+                        ChatCompletionRequestAssistantMessageArgs::default()
+                            .tool_calls(tool_calls.clone())
+                            .build()?;
+                    messages.push(assistant_msg.into());
+
+                    for tc in &tool_calls {
+                        let tool_name = &tc.function.name;
+                        let args = &tc.function.arguments;
+
+                        callback.on_tool_start(tool_name, args).await;
+
+                        let result = self.execute_tool(tool_name, args);
+                        let result_content = match result {
+                            Ok(output) => output,
+                            Err(e) => format!("Error: {e}"),
+                        };
+
+                        callback.on_tool_result(tool_name, &result_content).await;
+
+                        let tool_msg = ChatCompletionRequestToolMessageArgs::default()
+                            .content(result_content)
+                            .tool_call_id(tc.id.clone())
+                            .build()?;
+                        messages.push(tool_msg.into());
+                    }
+                }
+                _ => {
+                    final_response = response;
+                    break;
+                }
+            }
+        }
+
+        // Accumulate usage across iterations is already handled since final_response
+        // is set to the last response. For multi-iteration, merge usage.
+        callback.on_complete(&final_response.content).await;
+        Ok(final_response)
+    }
+
+    async fn stream_once(
+        &self,
+        messages: &[ChatCompletionRequestMessage],
+        callback: &dyn AgentStreamCallback,
+    ) -> anyhow::Result<AgentResponse> {
+        let request = self.build_request(messages.to_vec(), true)?;
         let mut stream = match self.llm_client.chat().create_stream(request).await {
             Ok(stream) => stream,
             Err(error) => {
@@ -129,9 +190,16 @@ impl Agent {
             }
         }
 
-        callback.on_complete(&response.content).await;
-
         Ok(response)
+    }
+
+    fn execute_tool(&self, name: &str, arguments: &str) -> anyhow::Result<String> {
+        let tool = self
+            .tools
+            .iter()
+            .find(|t| t.name() == name)
+            .ok_or_else(|| anyhow::anyhow!("unknown tool: {name}"))?;
+        tool.execute(arguments)
     }
 
     fn build_request(
@@ -151,6 +219,27 @@ impl Agent {
 
         let mut request = CreateChatCompletionRequestArgs::default();
         request.model(self.model()).messages(request_messages);
+
+        if !self.tools.is_empty() {
+            let chat_tools: Vec<ChatCompletionTool> = self
+                .tools
+                .iter()
+                .map(|tool| {
+                    let parameters: Option<serde_json::Value> =
+                        serde_json::from_str(tool.parameters_json()).ok();
+                    ChatCompletionTool {
+                        r#type: ChatCompletionToolType::Function,
+                        function: FunctionObject {
+                            name: tool.name().to_owned(),
+                            description: Some(tool.description().to_owned()),
+                            parameters,
+                            strict: None,
+                        },
+                    }
+                })
+                .collect();
+            request.tools(chat_tools);
+        }
 
         if stream {
             request
@@ -197,4 +286,38 @@ fn apply_stream_chunk(
     }
 
     updates
+}
+
+fn merge_tool_call_chunks(
+    chunks: &[ChatCompletionMessageToolCallChunk],
+) -> Vec<ChatCompletionMessageToolCall> {
+    let mut merged: BTreeMap<u32, ChatCompletionMessageToolCall> = BTreeMap::new();
+
+    for chunk in chunks {
+        let entry = merged.entry(chunk.index).or_insert_with(|| {
+            ChatCompletionMessageToolCall {
+                id: chunk.id.clone().unwrap_or_default(),
+                r#type: chunk.r#type.clone().unwrap_or(ChatCompletionToolType::Function),
+                function: FunctionCall {
+                    name: String::new(),
+                    arguments: String::new(),
+                },
+            }
+        });
+
+        if let Some(id) = &chunk.id {
+            entry.id = id.clone();
+        }
+
+        if let Some(func) = &chunk.function {
+            if let Some(name) = &func.name {
+                entry.function.name.clone_from(name);
+            }
+            if let Some(args) = &func.arguments {
+                entry.function.arguments.push_str(args);
+            }
+        }
+    }
+
+    merged.into_values().collect()
 }
