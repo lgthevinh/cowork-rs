@@ -339,6 +339,32 @@ pub(in crate::app) fn tool_message_body(_: &Theme) -> container::Style {
     }
 }
 
+pub(in crate::app) fn tool_detail_panel(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(Color::from_rgb8(0xf8, 0xf9, 0xfb))),
+        border: Border {
+            width: 1.0,
+            radius: 7.0.into(),
+            color: Color::from_rgb8(0xd3, 0xd8, 0xe0),
+        },
+        ..container::Style::default()
+    }
+}
+
+pub(in crate::app) fn tool_detail_code(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(Color::from_rgb8(0xff, 0xff, 0xfc))),
+        border: Border {
+            width: 1.0,
+            radius: 6.0.into(),
+            color: Color::from_rgb8(0xd8, 0xdc, 0xe4),
+        },
+        ..container::Style::default()
+    }
+}
+
 pub(in crate::app) fn inline_icon_badge(_: &Theme) -> container::Style {
     container::Style {
         text_color: Some(TEXT),

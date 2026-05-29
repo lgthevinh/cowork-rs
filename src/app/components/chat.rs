@@ -6,7 +6,8 @@ use iced::{Background, Element, Font, Length, Renderer, Theme, alignment, border
 use iced_fonts::octicons;
 
 use super::super::{
-    ChatIcon, ChatMessage, ChatMessageBlock, ChatMessageKind, EMOJI_FONT, Message, theme,
+    ChatIcon, ChatMessage, ChatMessageBlock, ChatMessageKind, EMOJI_FONT, Message, ToolCallDetail,
+    theme,
 };
 
 pub(in crate::app) const TRANSCRIPT_SCROLLABLE_ID: &str = "chat-transcript";
@@ -38,8 +39,8 @@ pub(in crate::app) fn chat_area<'a>(
 fn transcript(messages: &[ChatMessage]) -> Element<'_, Message> {
     let mut transcript = Column::new().spacing(28).width(Length::Fill);
 
-    for message in messages {
-        transcript = transcript.push(message_row(message));
+    for (index, message) in messages.iter().enumerate() {
+        transcript = transcript.push(message_row(index, message));
     }
 
     transcript.into()
@@ -63,11 +64,11 @@ fn chat_placeholder<'a>() -> Element<'a, Message> {
         .into()
 }
 
-fn message_row(message: &ChatMessage) -> Element<'_, Message> {
+fn message_row(index: usize, message: &ChatMessage) -> Element<'_, Message> {
     match message.kind {
         ChatMessageKind::User => user_message(message),
         ChatMessageKind::Assistant | ChatMessageKind::System | ChatMessageKind::Tool => {
-            agent_message(message)
+            agent_message(index, message)
         }
     }
 }
@@ -93,7 +94,7 @@ fn user_message(message: &ChatMessage) -> Element<'_, Message> {
     centered_transcript_lane(content).into()
 }
 
-fn agent_message(message: &ChatMessage) -> Element<'_, Message> {
+fn agent_message(index: usize, message: &ChatMessage) -> Element<'_, Message> {
     let icon = match message.kind {
         ChatMessageKind::System => octicons::alert().size(14),
         ChatMessageKind::Assistant => octicons::hubot().size(14),
@@ -110,15 +111,111 @@ fn agent_message(message: &ChatMessage) -> Element<'_, Message> {
         ChatMessageKind::System | ChatMessageKind::Tool
     );
 
+    let mut body = Column::new()
+        .spacing(10)
+        .width(Length::Fill)
+        .push(message_blocks(&message.blocks));
+
+    if let Some(detail) = &message.tool_detail {
+        body = body.push(tool_call_detail(index, detail, message.is_tool_detail_open));
+    }
+
     let content = column![
         message_header(icon, &message.author, is_emphasized),
-        container(message_blocks(&message.blocks))
-            .padding([12, 14])
-            .style(body_style),
+        container(body).padding([12, 14]).style(body_style),
     ]
     .spacing(8);
 
     centered_transcript_lane(content).into()
+}
+
+fn tool_call_detail<'a>(
+    index: usize,
+    detail: &'a ToolCallDetail,
+    is_open: bool,
+) -> Element<'a, Message> {
+    let toggle_label = if is_open { "Hide details" } else { "Details" };
+    let chevron = if is_open {
+        octicons::chevron_up().size(13)
+    } else {
+        octicons::chevron_down().size(13)
+    };
+
+    let mut content = Column::new().spacing(8).width(Length::Fill).push(
+        row![
+            column![
+                text(&detail.tool_name).size(13).font(Font {
+                    weight: font::Weight::Bold,
+                    ..Font::default()
+                }),
+                text(tool_detail_status(detail))
+                    .size(12)
+                    .color(theme::muted_text_color()),
+            ]
+            .spacing(2)
+            .width(Length::Fill),
+            button(
+                row![chevron, text(toggle_label).size(12)]
+                    .spacing(6)
+                    .align_y(alignment::Vertical::Center)
+            )
+            .on_press(Message::ToggleToolCallDetail(index))
+            .padding([6, 8])
+            .style(theme::quiet_button),
+        ]
+        .spacing(10)
+        .align_y(alignment::Vertical::Center),
+    );
+
+    if is_open {
+        content = content.push(tool_detail_section("Arguments", &detail.arguments));
+
+        if let Some(result) = &detail.result {
+            content = content.push(tool_detail_section("Result", result));
+        }
+    }
+
+    container(content)
+        .width(Length::Fill)
+        .padding([10, 12])
+        .style(theme::tool_detail_panel)
+        .into()
+}
+
+fn tool_detail_status(detail: &ToolCallDetail) -> String {
+    match &detail.result {
+        Some(result) => format!("Completed, {} result chars", result.len()),
+        None => format!("Running, {} argument chars", detail.arguments.len()),
+    }
+}
+
+fn tool_detail_section<'a>(label: &'static str, value: &'a str) -> Element<'a, Message> {
+    let display = if value.trim().is_empty() {
+        "(empty)"
+    } else {
+        value
+    };
+
+    column![
+        text(label).size(12).color(theme::muted_text_color()),
+        container(
+            scrollable(
+                text(display)
+                    .size(13)
+                    .font(Font::MONOSPACE)
+                    .line_height(1.35)
+            )
+            .direction(scrollable::Direction::Horizontal(
+                scrollable::Scrollbar::default().width(6).scroller_width(6),
+            ))
+        )
+        .width(Length::Fill)
+        .padding([8, 10])
+        .style(theme::tool_detail_code),
+    ]
+    .spacing(5)
+    .width(Length::Fill)
+    .into()
 }
 
 fn message_blocks<'a>(blocks: &'a [ChatMessageBlock]) -> Element<'a, Message> {
@@ -308,20 +405,63 @@ fn render_markdown_segments<'a>(
 }
 
 fn render_simple_markdown_text<'a>(source: &str, width: MarkdownWidth) -> Element<'a, Message> {
-    let mut content = Column::new().spacing(6).width(width.length());
+    let lines = source.lines().collect::<Vec<_>>();
+    let mut content = Column::new().spacing(8).width(width.length());
     let mut has_lines = false;
+    let mut index = 0;
 
-    for line in source.lines() {
-        let trimmed = line.trim();
+    while index < lines.len() {
+        let trimmed = lines[index].trim();
         if trimmed.is_empty() {
+            index += 1;
             continue;
         }
 
         has_lines = true;
-        if let Some(item) = trimmed.strip_prefix("- ") {
+        if let Some(language) = fenced_code_language(trimmed) {
+            let mut code_lines = Vec::new();
+            index += 1;
+
+            while index < lines.len() && !is_fenced_code_marker(lines[index].trim()) {
+                code_lines.push(lines[index]);
+                index += 1;
+            }
+
+            if index < lines.len() {
+                index += 1;
+            }
+
+            content = content.push(render_simple_code_block(language, &code_lines.join("\n")));
+            continue;
+        }
+
+        if let Some((level, heading)) = parse_heading(trimmed) {
+            content = content.push(
+                rich_text(inline_markdown_spans(heading))
+                    .size(heading_size(level))
+                    .font(Font {
+                        weight: font::Weight::Bold,
+                        ..Font::default()
+                    })
+                    .line_height(1.25)
+                    .width(width.length()),
+            );
+        } else if let Some(item) = parse_unordered_list_item(trimmed) {
             content = content.push(
                 row![
                     text("•").size(16).color(theme::muted_text_color()),
+                    rich_text(inline_markdown_spans(item))
+                        .size(16)
+                        .line_height(1.45)
+                        .width(Length::Fill),
+                ]
+                .spacing(8)
+                .align_y(alignment::Vertical::Top),
+            );
+        } else if let Some((number, item)) = parse_ordered_list_item(trimmed) {
+            content = content.push(
+                row![
+                    text(number).size(15).color(theme::muted_text_color()),
                     rich_text(inline_markdown_spans(item))
                         .size(16)
                         .line_height(1.45)
@@ -338,6 +478,8 @@ fn render_simple_markdown_text<'a>(source: &str, width: MarkdownWidth) -> Elemen
                     .width(width.length()),
             );
         }
+
+        index += 1;
     }
 
     if has_lines {
@@ -345,6 +487,106 @@ fn render_simple_markdown_text<'a>(source: &str, width: MarkdownWidth) -> Elemen
     } else {
         text("").into()
     }
+}
+
+fn fenced_code_language(line: &str) -> Option<Option<&str>> {
+    let marker = if line.starts_with("```") {
+        "```"
+    } else if line.starts_with("~~~") {
+        "~~~"
+    } else {
+        return None;
+    };
+
+    let language = line
+        .trim_start_matches(marker)
+        .trim()
+        .split_whitespace()
+        .next()
+        .filter(|value| !value.is_empty());
+
+    Some(language)
+}
+
+fn is_fenced_code_marker(line: &str) -> bool {
+    line.starts_with("```") || line.starts_with("~~~")
+}
+
+fn parse_heading(line: &str) -> Option<(usize, &str)> {
+    let level = line
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+
+    let heading = line[level..].trim();
+    (!heading.is_empty()).then_some((level, heading))
+}
+
+fn heading_size(level: usize) -> u32 {
+    match level {
+        1 => 24,
+        2 => 20,
+        3 => 17,
+        _ => 16,
+    }
+}
+
+fn parse_unordered_list_item(line: &str) -> Option<&str> {
+    line.strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .or_else(|| line.strip_prefix("• "))
+}
+
+fn parse_ordered_list_item(line: &str) -> Option<(String, &str)> {
+    let (number, rest) = line.split_once(". ")?;
+
+    if number.is_empty() || !number.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+
+    Some((format!("{number}."), rest))
+}
+
+fn render_simple_code_block<'a>(language: Option<&str>, code: &str) -> Element<'a, Message> {
+    let mut code_lines = Column::new().spacing(2).width(Length::Shrink);
+
+    if code.is_empty() {
+        code_lines = code_lines.push(text("").font(Font::MONOSPACE).size(14));
+    } else {
+        for line in code.lines() {
+            code_lines = code_lines.push(text(line.to_owned()).font(Font::MONOSPACE).size(14));
+        }
+    }
+
+    let body = scrollable(container(code_lines).padding([12, 14])).direction(
+        scrollable::Direction::Horizontal(
+            scrollable::Scrollbar::default().width(6).scroller_width(6),
+        ),
+    );
+
+    let content = if let Some(language) = language {
+        column![
+            container(
+                text(language.to_owned())
+                    .size(12)
+                    .color(theme::muted_text_color())
+            )
+            .padding([8, 14])
+            .width(Length::Fill),
+            body,
+        ]
+        .spacing(0)
+    } else {
+        column![body]
+    };
+
+    container(content)
+        .width(Length::Fill)
+        .style(theme::markdown_code_block)
+        .into()
 }
 
 fn inline_markdown_spans(source: &str) -> Vec<Span<'static, (), Font>> {
@@ -414,7 +656,7 @@ fn markdown_span(content: &str, style: InlineStyle) -> Span<'static, (), Font> {
 
 fn render_simple_markdown_table<'a>(table: SimpleMarkdownTable) -> Element<'a, Message> {
     let column_count = table.headers.len();
-    let mut content = Column::new().spacing(0).width(Length::Shrink);
+    let mut content = Column::new().spacing(0).width(Length::Fill);
 
     content = content.push(render_table_row(table.headers, column_count, true));
 
@@ -422,14 +664,11 @@ fn render_simple_markdown_table<'a>(table: SimpleMarkdownTable) -> Element<'a, M
         content = content.push(render_table_row(row, column_count, false));
     }
 
-    container(
-        scrollable(container(content)).direction(scrollable::Direction::Horizontal(
-            scrollable::Scrollbar::default().width(6).scroller_width(6),
-        )),
-    )
-    .width(Length::Shrink)
-    .style(theme::markdown_table)
-    .into()
+    container(content)
+        .width(Length::Fill)
+        .max_width(760)
+        .style(theme::markdown_table)
+        .into()
 }
 
 fn render_table_row<'a>(
@@ -437,11 +676,16 @@ fn render_table_row<'a>(
     column_count: usize,
     is_header: bool,
 ) -> Element<'a, Message> {
-    let mut row_content = row![].spacing(0).width(Length::Shrink);
+    let mut row_content = row![].spacing(0).width(Length::Fill);
 
     for column_index in 0..column_count {
         let cell = cells.get(column_index).map_or("", String::as_str);
-        row_content = row_content.push(render_table_cell(cell, column_index, is_header));
+        row_content = row_content.push(render_table_cell(
+            cell,
+            column_index,
+            column_count,
+            is_header,
+        ));
     }
 
     row_content.into()
@@ -450,23 +694,21 @@ fn render_table_row<'a>(
 fn render_table_cell<'a>(
     source: &str,
     column_index: usize,
+    column_count: usize,
     is_header: bool,
 ) -> Element<'a, Message> {
-    let (content, is_code) = normalize_table_cell(source);
-    let mut label = text(content)
+    let label = rich_text(inline_markdown_spans(source))
         .size(if is_header { 15 } else { 14 })
+        .line_height(1.35)
+        .width(Length::Fill)
         .color(if is_header {
             theme::text_color()
         } else {
             theme::muted_text_color()
         });
 
-    if is_code {
-        label = label.font(Font::MONOSPACE);
-    }
-
     container(label)
-        .width(table_column_width(column_index))
+        .width(table_column_width(column_index, column_count))
         .padding([8, 12])
         .style(if is_header {
             theme::markdown_table_header_cell
@@ -476,26 +718,16 @@ fn render_table_cell<'a>(
         .into()
 }
 
-fn normalize_table_cell(source: &str) -> (String, bool) {
-    let trimmed = source.trim();
-
-    if trimmed.len() >= 2 && trimmed.starts_with('`') && trimmed.ends_with('`') {
-        (
-            trimmed
-                .trim_start_matches('`')
-                .trim_end_matches('`')
-                .to_owned(),
-            true,
-        )
-    } else {
-        (trimmed.to_owned(), false)
-    }
-}
-
-fn table_column_width(column_index: usize) -> Length {
-    match column_index {
-        0 => 96.into(),
-        _ => 280.into(),
+fn table_column_width(column_index: usize, column_count: usize) -> Length {
+    match column_count {
+        0 | 1 => Length::Fill,
+        2 => Length::FillPortion(if column_index == 0 { 1 } else { 2 }),
+        3 => match column_index {
+            0 => Length::FillPortion(1),
+            1 => Length::FillPortion(2),
+            _ => Length::FillPortion(3),
+        },
+        _ => Length::FillPortion(1),
     }
 }
 

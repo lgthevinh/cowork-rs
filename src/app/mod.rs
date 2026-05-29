@@ -97,6 +97,7 @@ pub(super) enum Message {
         tool_name: String,
         result: String,
     },
+    ToggleToolCallDetail(usize),
     MarkdownLinkClicked(markdown::Uri),
 }
 
@@ -135,6 +136,15 @@ pub(super) struct ChatMessage {
     body: String,
     pub(super) markdown: Vec<markdown::Item>,
     pub(super) blocks: Vec<ChatMessageBlock>,
+    pub(super) tool_detail: Option<ToolCallDetail>,
+    pub(super) is_tool_detail_open: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ToolCallDetail {
+    pub(super) tool_name: String,
+    pub(super) arguments: String,
+    pub(super) result: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,6 +199,18 @@ impl ChatMessage {
         Self::new(ChatMessageKind::Tool, tool_name, body)
     }
 
+    fn tool_call_started(tool_name: impl Into<String>, arguments: impl Into<String>) -> Self {
+        let tool_name = tool_name.into();
+        let arguments = arguments.into();
+        let mut message = Self::tool(&tool_name, format!(":tools: `{tool_name}` is running"));
+        message.tool_detail = Some(ToolCallDetail {
+            tool_name,
+            arguments,
+            result: None,
+        });
+        message
+    }
+
     fn new(kind: ChatMessageKind, author: impl Into<String>, body: impl Into<String>) -> Self {
         let body = body.into();
 
@@ -198,6 +220,8 @@ impl ChatMessage {
             body: body.clone(),
             markdown: markdown::parse(&body).collect(),
             blocks: parse_chat_blocks(&body),
+            tool_detail: None,
+            is_tool_detail_open: false,
         }
     }
 
@@ -215,6 +239,24 @@ impl ChatMessage {
 
     pub(super) fn body(&self) -> &str {
         &self.body
+    }
+
+    fn complete_tool_call(&mut self, tool_name: &str, result: String) {
+        let result_len = result.len();
+
+        if let Some(detail) = &mut self.tool_detail {
+            detail.result = Some(result);
+        } else {
+            self.tool_detail = Some(ToolCallDetail {
+                tool_name: tool_name.to_owned(),
+                arguments: String::new(),
+                result: Some(result),
+            });
+        }
+
+        self.set_body(format!(
+            ":check: `{tool_name}` completed ({result_len} chars)"
+        ));
     }
 }
 
@@ -503,12 +545,13 @@ impl CoworkApp {
                 let _usage = usage;
                 Task::none()
             }
-            Message::ToolCallStarted { tool_name, .. } => {
+            Message::ToolCallStarted {
+                tool_name,
+                arguments,
+            } => {
                 if let Some(index) = self.streaming_assistant_index {
                     if let Some(message) = self.messages.get_mut(index) {
-                        message.kind = ChatMessageKind::Tool;
-                        message.author = tool_name.clone();
-                        message.set_body(format!(":tools: Calling tool `{tool_name}`..."));
+                        *message = ChatMessage::tool_call_started(tool_name.clone(), arguments);
                     }
                     self.messages.push(ChatMessage::assistant(String::new()));
                     self.streaming_assistant_index = Some(self.messages.len() - 1);
@@ -520,17 +563,19 @@ impl CoworkApp {
                     if index > 0 {
                         if let Some(tool_msg) = self.messages.get_mut(index - 1) {
                             if tool_msg.kind == ChatMessageKind::Tool {
-                                let display = if result.len() > 200 {
-                                    format!(":check: `{tool_name}` → {}...", &result[..200])
-                                } else {
-                                    format!(":check: `{tool_name}` → {result}")
-                                };
-                                tool_msg.set_body(display);
+                                tool_msg.complete_tool_call(&tool_name, result);
                             }
                         }
                     }
                 }
                 scroll_to_bottom()
+            }
+            Message::ToggleToolCallDetail(index) => {
+                if let Some(message) = self.messages.get_mut(index) {
+                    message.is_tool_detail_open = !message.is_tool_detail_open;
+                }
+
+                Task::none()
             }
             Message::MarkdownLinkClicked(uri) => {
                 let _clicked_uri = uri;

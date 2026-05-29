@@ -5,8 +5,11 @@ use rmcp::{
 use std::collections::BTreeMap;
 
 use crate::agent::agent_tool::AgentTool;
+use crate::log::ilog::ILog;
 
 use super::mcp_tool_adapter::McpToolAdapter;
+
+const TAG: &str = "McpClientManager";
 
 struct McpServerHandle {
     client: RunningService<RoleClient, ()>,
@@ -51,9 +54,12 @@ impl McpClientManager {
             .await
             .context(format!("failed to list tools from MCP server '{name}'"))?;
 
-        tracing::info!(
-            "Connected to MCP server '{name}' via stdio (command: {command}), discovered {} tools",
-            tools.len()
+        ILog::i(
+            TAG,
+            &format!(
+                "connect_stdio_with_env: connected server={name} command={command} tools={}",
+                tools.len()
+            ),
         );
 
         self.servers.push(McpServerHandle { client, tools });
@@ -77,9 +83,12 @@ impl McpClientManager {
             .await
             .context(format!("failed to list tools from MCP server '{name}'"))?;
 
-        tracing::info!(
-            "Connected to MCP server '{name}' via HTTP ({url}), discovered {} tools",
-            tools.len()
+        ILog::i(
+            TAG,
+            &format!(
+                "connect_http: connected server={name} url={url} tools={}",
+                tools.len()
+            ),
         );
 
         self.servers.push(McpServerHandle { client, tools });

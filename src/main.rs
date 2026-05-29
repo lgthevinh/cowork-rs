@@ -1,5 +1,6 @@
 mod agent;
 mod app;
+mod log;
 mod repo;
 
 use agent::agent_orchestrator;

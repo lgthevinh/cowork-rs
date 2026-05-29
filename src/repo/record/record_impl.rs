@@ -1,4 +1,7 @@
+use crate::log::ilog::ILog;
 use crate::repo::RecordSchema;
+
+const TAG: &str = "RecordSchema";
 
 pub const MESSAGE_ROLE_SYSTEM: u16 = 0;
 pub const MESSAGE_ROLE_ASSISTANT: u16 = 1;
@@ -29,10 +32,12 @@ pub struct MessageRecord {
 
 impl RecordSchema for SessionRecord {
     fn table_name() -> &'static str {
+        ILog::d(TAG, "SessionRecord::table_name: sessions");
         "sessions"
     }
 
     fn create_table_sql() -> &'static str {
+        ILog::d(TAG, "SessionRecord::create_table_sql: building schema SQL");
         r#"
         CREATE TABLE IF NOT EXISTS sessions (
             session_id TEXT PRIMARY KEY,
@@ -53,10 +58,12 @@ impl RecordSchema for SessionRecord {
 
 impl RecordSchema for MessageRecord {
     fn table_name() -> &'static str {
+        ILog::d(TAG, "MessageRecord::table_name: messages");
         "messages"
     }
 
     fn create_table_sql() -> &'static str {
+        ILog::d(TAG, "MessageRecord::create_table_sql: building schema SQL");
         r#"
         CREATE TABLE IF NOT EXISTS messages (
             message_id TEXT PRIMARY KEY,

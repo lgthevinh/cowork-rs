@@ -1,9 +1,15 @@
 use rusqlite::{Connection, Row, ToSql, params};
 
+use crate::log::ilog::ILog;
+use crate::repo::record::record_impl::{MessageRecord, SessionRecord};
+
 use super::repo::{Repo, build_where_clause};
 use super::repo_filter::RepoFilter;
 use super::sqlite_db::SqliteDb;
-use crate::repo::record::record_impl::{MessageRecord, SessionRecord};
+
+const SESSION_TAG: &str = "SessionRepo";
+const MESSAGE_TAG: &str = "MessageRepo";
+const TAG: &str = "RepoImpl";
 
 pub struct SessionRepo<'a> {
     conn: &'a Connection,
@@ -11,10 +17,15 @@ pub struct SessionRepo<'a> {
 
 impl<'a> SessionRepo<'a> {
     pub fn new(db: &'a SqliteDb) -> Self {
+        ILog::d(SESSION_TAG, "new: creating repository from SqliteDb");
         Self { conn: db.conn() }
     }
 
     pub fn from_conn(conn: &'a Connection) -> Self {
+        ILog::d(
+            SESSION_TAG,
+            "from_conn: creating repository from connection",
+        );
         Self { conn }
     }
 }
@@ -25,16 +36,22 @@ pub struct MessageRepo<'a> {
 
 impl<'a> MessageRepo<'a> {
     pub fn new(db: &'a SqliteDb) -> Self {
+        ILog::d(MESSAGE_TAG, "new: creating repository from SqliteDb");
         Self { conn: db.conn() }
     }
 
     pub fn from_conn(conn: &'a Connection) -> Self {
+        ILog::d(
+            MESSAGE_TAG,
+            "from_conn: creating repository from connection",
+        );
         Self { conn }
     }
 }
 
 impl Repo<SessionRecord> for SessionRepo<'_> {
     fn read_all(&self) -> anyhow::Result<Vec<SessionRecord>> {
+        ILog::d(SESSION_TAG, "read_all: start");
         let mut statement = self.conn.prepare(
             r#"
             SELECT
@@ -53,10 +70,20 @@ impl Repo<SessionRecord> for SessionRepo<'_> {
 
         let rows = statement.query_map([], session_from_row)?;
 
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let records = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        ILog::d(
+            SESSION_TAG,
+            &format!("read_all: completed count={}", records.len()),
+        );
+
+        Ok(records)
     }
 
     fn read(&self, filters: &[RepoFilter]) -> anyhow::Result<Vec<SessionRecord>> {
+        ILog::d(
+            SESSION_TAG,
+            &format!("read: start filters={}", filters.len()),
+        );
         let where_clause = build_where_clause(filters)?;
         let sql = format!(
             r#"
@@ -79,11 +106,27 @@ impl Repo<SessionRecord> for SessionRepo<'_> {
         let params = filter_params(filters);
         let rows = statement.query_map(params.as_slice(), session_from_row)?;
 
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let records = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        ILog::d(
+            SESSION_TAG,
+            &format!("read: completed count={}", records.len()),
+        );
+
+        Ok(records)
     }
 
     fn upsert(&self, item: SessionRecord) -> anyhow::Result<()> {
-        self.conn.execute(
+        ILog::d(
+            SESSION_TAG,
+            &format!(
+                "upsert: session_id={} title_len={} model={}",
+                item.session_id,
+                item.title.len(),
+                item.model
+            ),
+        );
+
+        let rows_changed = self.conn.execute(
             r#"
             INSERT INTO sessions (
                 session_id,
@@ -116,16 +159,31 @@ impl Repo<SessionRecord> for SessionRepo<'_> {
                 item.top_k,
             ],
         )?;
+        ILog::d(
+            SESSION_TAG,
+            &format!(
+                "upsert: completed session_id={} rows_changed={rows_changed}",
+                item.session_id
+            ),
+        );
 
         Ok(())
     }
 
     fn delete(&self, filters: &[RepoFilter]) -> anyhow::Result<()> {
+        ILog::d(
+            SESSION_TAG,
+            &format!("delete: start filters={}", filters.len()),
+        );
         let where_clause = build_where_clause(filters)?;
         let sql = format!("DELETE FROM sessions {where_clause}");
         let params = filter_params(filters);
 
-        self.conn.execute(&sql, params.as_slice())?;
+        let rows_changed = self.conn.execute(&sql, params.as_slice())?;
+        ILog::d(
+            SESSION_TAG,
+            &format!("delete: completed rows_changed={rows_changed}"),
+        );
 
         Ok(())
     }
@@ -133,6 +191,7 @@ impl Repo<SessionRecord> for SessionRepo<'_> {
 
 impl Repo<MessageRecord> for MessageRepo<'_> {
     fn read_all(&self) -> anyhow::Result<Vec<MessageRecord>> {
+        ILog::d(MESSAGE_TAG, "read_all: start");
         let mut statement = self.conn.prepare(
             r#"
             SELECT
@@ -149,10 +208,20 @@ impl Repo<MessageRecord> for MessageRepo<'_> {
 
         let rows = statement.query_map([], message_from_row)?;
 
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let records = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        ILog::d(
+            MESSAGE_TAG,
+            &format!("read_all: completed count={}", records.len()),
+        );
+
+        Ok(records)
     }
 
     fn read(&self, filters: &[RepoFilter]) -> anyhow::Result<Vec<MessageRecord>> {
+        ILog::d(
+            MESSAGE_TAG,
+            &format!("read: start filters={}", filters.len()),
+        );
         let where_clause = build_where_clause(filters)?;
         let sql = format!(
             r#"
@@ -173,11 +242,29 @@ impl Repo<MessageRecord> for MessageRepo<'_> {
         let params = filter_params(filters);
         let rows = statement.query_map(params.as_slice(), message_from_row)?;
 
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let records = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        ILog::d(
+            MESSAGE_TAG,
+            &format!("read: completed count={}", records.len()),
+        );
+
+        Ok(records)
     }
 
     fn upsert(&self, item: MessageRecord) -> anyhow::Result<()> {
-        self.conn.execute(
+        ILog::d(
+            MESSAGE_TAG,
+            &format!(
+                "upsert: message_id={} session_id={} sequence={} role={} content_len={}",
+                item.message_id,
+                item.session_id,
+                item.sequence,
+                item.role,
+                item.content.len()
+            ),
+        );
+
+        let rows_changed = self.conn.execute(
             r#"
             INSERT INTO messages (
                 message_id,
@@ -204,22 +291,38 @@ impl Repo<MessageRecord> for MessageRepo<'_> {
                 item.created_at,
             ],
         )?;
+        ILog::d(
+            MESSAGE_TAG,
+            &format!(
+                "upsert: completed message_id={} rows_changed={rows_changed}",
+                item.message_id
+            ),
+        );
 
         Ok(())
     }
 
     fn delete(&self, filters: &[RepoFilter]) -> anyhow::Result<()> {
+        ILog::d(
+            MESSAGE_TAG,
+            &format!("delete: start filters={}", filters.len()),
+        );
         let where_clause = build_where_clause(filters)?;
         let sql = format!("DELETE FROM messages {where_clause}");
         let params = filter_params(filters);
 
-        self.conn.execute(&sql, params.as_slice())?;
+        let rows_changed = self.conn.execute(&sql, params.as_slice())?;
+        ILog::d(
+            MESSAGE_TAG,
+            &format!("delete: completed rows_changed={rows_changed}"),
+        );
 
         Ok(())
     }
 }
 
 fn filter_params(filters: &[RepoFilter]) -> Vec<&dyn ToSql> {
+    ILog::d(TAG, &format!("filter_params: filters={}", filters.len()));
     filters
         .iter()
         .map(|filter| &filter.value as &dyn ToSql)
@@ -227,6 +330,7 @@ fn filter_params(filters: &[RepoFilter]) -> Vec<&dyn ToSql> {
 }
 
 fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
+    ILog::d(TAG, "session_from_row: mapping row");
     Ok(SessionRecord {
         session_id: row.get("session_id")?,
         title: row.get("title")?,
@@ -240,6 +344,7 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
 }
 
 fn message_from_row(row: &Row<'_>) -> rusqlite::Result<MessageRecord> {
+    ILog::d(TAG, "message_from_row: mapping row");
     Ok(MessageRecord {
         message_id: row.get("message_id")?,
         session_id: row.get("session_id")?,
