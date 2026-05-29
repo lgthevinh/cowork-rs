@@ -1,5 +1,6 @@
 /target
 data.db
+mcp-servers.json
 .env
 .env.*
 !.env.example

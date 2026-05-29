@@ -2,6 +2,7 @@ use crate::agent::agent_tool::AgentTool;
 
 pub struct GetCurrentTimeTool;
 
+#[async_trait::async_trait]
 impl AgentTool for GetCurrentTimeTool {
     fn name(&self) -> &str {
         "get_current_time"
@@ -15,7 +16,7 @@ impl AgentTool for GetCurrentTimeTool {
         r#"{"type": "object", "properties": {}, "required": []}"#
     }
 
-    fn execute(&self, _json_input: &str) -> anyhow::Result<String> {
+    async fn execute(&self, _json_input: &str) -> anyhow::Result<String> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| anyhow::anyhow!("system time error: {e}"))?;

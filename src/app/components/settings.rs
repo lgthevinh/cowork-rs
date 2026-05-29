@@ -14,6 +14,8 @@ pub(in crate::app) fn settings_dialog<'a>(
     emoji_font_path: Option<String>,
     emoji_font_error: Option<String>,
     is_waiting_for_agent: bool,
+    mcp_server_count: usize,
+    mcp_tool_count: usize,
 ) -> Element<'a, Message> {
     let dialog = container(row![
         settings_sidebar(active_tab),
@@ -26,7 +28,9 @@ pub(in crate::app) fn settings_dialog<'a>(
             is_emoji_font_loaded,
             emoji_font_path,
             emoji_font_error,
-            is_waiting_for_agent
+            is_waiting_for_agent,
+            mcp_server_count,
+            mcp_tool_count,
         ),
     ])
     .width(760)
@@ -117,6 +121,8 @@ fn settings_content<'a>(
     emoji_font_path: Option<String>,
     emoji_font_error: Option<String>,
     is_waiting_for_agent: bool,
+    mcp_server_count: usize,
+    mcp_tool_count: usize,
 ) -> Element<'a, Message> {
     let content = match active_tab {
         SettingsTab::General => general_tab(
@@ -126,7 +132,7 @@ fn settings_content<'a>(
             emoji_font_error,
         ),
         SettingsTab::Agent => agent_tab(session_model, is_waiting_for_agent),
-        SettingsTab::Tools => tools_tab(),
+        SettingsTab::Tools => tools_tab(mcp_server_count, mcp_tool_count),
         SettingsTab::Storage => storage_tab(message_count, db_path),
     };
 
@@ -149,10 +155,10 @@ fn settings_header(active_tab: SettingsTab) -> Element<'static, Message> {
         .width(Length::Fill),
         button(icon_label(octicons::x().size(14), "Close"))
             .on_press(Message::CloseSettings)
-            .padding([8, 12])
+            .padding([6, 10])
             .style(theme::quiet_button),
     ]
-    .align_y(alignment::Vertical::Center)
+    .align_y(alignment::Vertical::Top)
     .into()
 }
 
@@ -214,11 +220,17 @@ fn agent_tab<'a>(session_model: &'a str, is_waiting_for_agent: bool) -> Element<
     ])
 }
 
-fn tools_tab<'a>() -> Element<'a, Message> {
+fn tools_tab<'a>(mcp_server_count: usize, mcp_tool_count: usize) -> Element<'a, Message> {
+    let mcp_status = if mcp_server_count > 0 {
+        format!("{mcp_server_count} server(s), {mcp_tool_count} tool(s)")
+    } else {
+        "No servers connected".to_owned()
+    };
+
     settings_panel(vec![
-        detail_row("Runtime", "Not enabled"),
-        detail_row("MCP", "Planned"),
-        detail_row("Tool schemas", "Planned"),
+        detail_row("Runtime", "Active"),
+        detail_row("MCP", mcp_status),
+        detail_row("Tool schemas", "JSON Schema"),
     ])
 }
 

@@ -1,5 +1,5 @@
 use iced::widget::{button, container, markdown};
-use iced::{Background, Border, Color, Theme};
+use iced::{Background, Border, Color, Font, Theme, border, padding};
 
 use super::CoworkApp;
 
@@ -25,7 +25,21 @@ pub(super) fn theme(_: &CoworkApp) -> Theme {
 }
 
 pub(in crate::app) fn markdown_settings() -> markdown::Settings {
-    markdown::Settings::with_text_size(16, soft_white_green())
+    let mut settings = markdown::Settings::with_text_size(16, soft_white_green());
+    settings.code_size = 14.into();
+    settings.spacing = 12.into();
+    settings.style.inline_code_padding = padding::left(4).right(4).top(1).bottom(1);
+    settings.style.inline_code_highlight = markdown::Highlight {
+        background: Background::Color(Color::from_rgb8(0xee, 0xef, 0xea)),
+        border: border::rounded(4)
+            .width(1)
+            .color(Color::from_rgb8(0xd6, 0xd5, 0xcd)),
+    };
+    settings.style.inline_code_color = Color::from_rgb8(0x19, 0x1b, 0x18);
+    settings.style.inline_code_font = Font::MONOSPACE;
+    settings.style.code_block_font = Font::MONOSPACE;
+    settings.style.link_color = Color::from_rgb8(0x1c, 0x7c, 0x54);
+    settings
 }
 
 pub(in crate::app) fn app_background(_: &Theme) -> container::Style {
@@ -114,8 +128,8 @@ pub(in crate::app) fn settings_sidebar(_: &Theme) -> container::Style {
         background: Some(Background::Color(SIDEBAR)),
         border: Border {
             width: 1.0,
+            radius: border::left(8),
             color: BORDER,
-            ..Border::default()
         },
         ..container::Style::default()
     }
@@ -247,6 +261,58 @@ pub(in crate::app) fn assistant_message_body(_: &Theme) -> container::Style {
     }
 }
 
+pub(in crate::app) fn markdown_table(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(PANEL)),
+        border: Border {
+            width: 1.0,
+            radius: 7.0.into(),
+            color: BORDER,
+        },
+        ..container::Style::default()
+    }
+}
+
+pub(in crate::app) fn markdown_table_header_cell(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(USER_BUBBLE)),
+        border: Border {
+            width: 1.0,
+            color: BORDER,
+            ..Border::default()
+        },
+        ..container::Style::default()
+    }
+}
+
+pub(in crate::app) fn markdown_table_cell(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(PANEL)),
+        border: Border {
+            width: 1.0,
+            color: BORDER,
+            ..Border::default()
+        },
+        ..container::Style::default()
+    }
+}
+
+pub(in crate::app) fn markdown_code_block(_: &Theme) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(Color::from_rgb8(0xf1, 0xf3, 0xef))),
+        border: Border {
+            width: 1.0,
+            radius: 7.0.into(),
+            color: Color::from_rgb8(0xd4, 0xd8, 0xd1),
+        },
+        ..container::Style::default()
+    }
+}
+
 pub(in crate::app) fn system_message_body(_: &Theme) -> container::Style {
     container::Style {
         text_color: Some(TEXT),
@@ -359,6 +425,10 @@ pub(in crate::app) fn quiet_button(_: &Theme, status: button::Status) -> button:
 
 pub(in crate::app) fn muted_text_color() -> Color {
     MUTED_TEXT
+}
+
+pub(in crate::app) fn text_color() -> Color {
+    TEXT
 }
 
 pub(in crate::app) fn warning_text_color() -> Color {

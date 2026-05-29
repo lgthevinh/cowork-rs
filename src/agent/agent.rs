@@ -115,10 +115,9 @@ impl Agent {
                 Some(FinishReason::ToolCalls) => {
                     let tool_calls = merge_tool_call_chunks(&response.tool_calls);
 
-                    let assistant_msg =
-                        ChatCompletionRequestAssistantMessageArgs::default()
-                            .tool_calls(tool_calls.clone())
-                            .build()?;
+                    let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
+                        .tool_calls(tool_calls.clone())
+                        .build()?;
                     messages.push(assistant_msg.into());
 
                     for tc in &tool_calls {
@@ -127,7 +126,7 @@ impl Agent {
 
                         callback.on_tool_start(tool_name, args).await;
 
-                        let result = self.execute_tool(tool_name, args);
+                        let result = self.execute_tool(tool_name, args).await;
                         let result_content = match result {
                             Ok(output) => output,
                             Err(e) => format!("Error: {e}"),
@@ -193,13 +192,13 @@ impl Agent {
         Ok(response)
     }
 
-    fn execute_tool(&self, name: &str, arguments: &str) -> anyhow::Result<String> {
+    async fn execute_tool(&self, name: &str, arguments: &str) -> anyhow::Result<String> {
         let tool = self
             .tools
             .iter()
             .find(|t| t.name() == name)
             .ok_or_else(|| anyhow::anyhow!("unknown tool: {name}"))?;
-        tool.execute(arguments)
+        tool.execute(arguments).await
     }
 
     fn build_request(
@@ -294,16 +293,19 @@ fn merge_tool_call_chunks(
     let mut merged: BTreeMap<u32, ChatCompletionMessageToolCall> = BTreeMap::new();
 
     for chunk in chunks {
-        let entry = merged.entry(chunk.index).or_insert_with(|| {
-            ChatCompletionMessageToolCall {
+        let entry = merged
+            .entry(chunk.index)
+            .or_insert_with(|| ChatCompletionMessageToolCall {
                 id: chunk.id.clone().unwrap_or_default(),
-                r#type: chunk.r#type.clone().unwrap_or(ChatCompletionToolType::Function),
+                r#type: chunk
+                    .r#type
+                    .clone()
+                    .unwrap_or(ChatCompletionToolType::Function),
                 function: FunctionCall {
                     name: String::new(),
                     arguments: String::new(),
                 },
-            }
-        });
+            });
 
         if let Some(id) = &chunk.id {
             entry.id = id.clone();

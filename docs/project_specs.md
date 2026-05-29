@@ -60,10 +60,25 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 
 Real `.env` files are ignored by Git. Production builds should prefer environment variables or a future settings/keychain flow.
 
+MCP servers are loaded at startup from `mcp-servers.json` when the file exists.
+The file is ignored by Git because MCP entries can contain local paths or
+environment values. Use `mcp-servers.example.json` as the template. The default
+example enables the official filesystem MCP server through:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    }
+  }
+}
+```
+
 ## Roadmap
 
 - Load previous sessions from SQLite into the sidebar.
-- Add real tool execution through `AgentTool`.
 - Add JSON schema validation for tool inputs.
 - Add knowledge document records and embedding storage.
 - Support streaming responses and cancellation.

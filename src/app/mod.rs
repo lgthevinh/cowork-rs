@@ -48,10 +48,19 @@ pub(super) const EMOJI_FONT: iced::Font = iced::Font::with_name("Noto Emoji");
 
 pub fn run(db: SqliteDb, agent_orchestrator: AgentOrchestrator) -> iced::Result {
     let db = Rc::new(db);
+    let mcp_server_count = agent_orchestrator.mcp_server_count();
+    let mcp_tool_count = agent_orchestrator.mcp_tool_count();
     let agent_orchestrator = Arc::new(agent_orchestrator);
 
     application(
-        move || CoworkApp::new(Rc::clone(&db), Arc::clone(&agent_orchestrator)),
+        move || {
+            CoworkApp::new(
+                Rc::clone(&db),
+                Arc::clone(&agent_orchestrator),
+                mcp_server_count,
+                mcp_tool_count,
+            )
+        },
         CoworkApp::update,
         CoworkApp::view,
     )
@@ -80,8 +89,14 @@ pub(super) enum Message {
     ChatStreamCompleted(String),
     ChatStreamFailed(String),
     ChatStreamUsage(CompletionUsage),
-    ToolCallStarted { tool_name: String, arguments: String },
-    ToolCallCompleted { tool_name: String, result: String },
+    ToolCallStarted {
+        tool_name: String,
+        arguments: String,
+    },
+    ToolCallCompleted {
+        tool_name: String,
+        result: String,
+    },
     MarkdownLinkClicked(markdown::Uri),
 }
 
@@ -224,10 +239,17 @@ struct CoworkApp {
     messages: Vec<ChatMessage>,
     streaming_assistant_index: Option<usize>,
     is_waiting_for_agent: bool,
+    mcp_server_count: usize,
+    mcp_tool_count: usize,
 }
 
 impl CoworkApp {
-    fn new(db: Rc<SqliteDb>, agent_orchestrator: Arc<AgentOrchestrator>) -> (Self, Task<Message>) {
+    fn new(
+        db: Rc<SqliteDb>,
+        agent_orchestrator: Arc<AgentOrchestrator>,
+        mcp_server_count: usize,
+        mcp_tool_count: usize,
+    ) -> (Self, Task<Message>) {
         let now = now_millis();
         let session_id = format!("session-{now}");
         let session_title = String::from("New session");
@@ -258,6 +280,8 @@ impl CoworkApp {
             messages: Vec::new(),
             streaming_assistant_index: None,
             is_waiting_for_agent: false,
+            mcp_server_count,
+            mcp_tool_count,
         };
 
         app.refresh_recent_sessions();
@@ -742,7 +766,9 @@ impl CoworkApp {
                     self.is_emoji_font_loaded,
                     self.emoji_font_path.clone(),
                     self.emoji_font_error.clone(),
-                    self.is_waiting_for_agent
+                    self.is_waiting_for_agent,
+                    self.mcp_server_count,
+                    self.mcp_tool_count,
                 ),
             ]
             .width(Length::Fill)

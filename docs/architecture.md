@@ -37,6 +37,24 @@ OPENAI_BASE_URL=https://api.openai.com/v1   # Optional, defaults shown
 COWORK_EMOJI_FONT=        # Optional, overrides emoji font path
 ```
 
+**MCP server configuration**: on startup, the agent orchestrator loads
+`mcp-servers.json` from the repository/runtime working directory when present.
+The file uses the common MCP host shape:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    }
+  }
+}
+```
+
+`mcp-servers.json` is ignored by Git because it may contain machine-local paths
+or env values. `mcp-servers.example.json` is the committed template.
+
 **Rust toolchain**: Pinned to Rust 1.95.0 via `rust-toolchain.toml`, targeting `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`.
 
 ## Entry Point: `main.rs`
@@ -57,15 +75,16 @@ The `main()` function performs three sequential initialization steps:
 | `agent_orchestrator.rs` | `AgentOrchestrator` container, `init()` entry point, env config |
 | `agent_preset.rs` | Compile-time `AgentPreset` constants |
 | `agent_tool.rs` | `AgentTool` trait for tool execution |
-| `agent_tool_mcp.rs` | Placeholder for MCP tool integration |
-| `tool/mcp/mcp_tool_adapter.rs` | Placeholder for MCP adapter |
+| `agent_tool_mcp.rs` | Reserved for MCP-specific agent helpers |
+| `tool/mcp/mcp_client.rs` | MCP client manager for stdio and HTTP servers |
+| `tool/mcp/mcp_tool_adapter.rs` | Adapter that exposes discovered MCP tools as `AgentTool` |
 
 ### `Agent` (`agent.rs`)
 
 The core LLM interaction unit. Holds:
 - `id`, `name`, `system_instruction`, `model` — identity and configuration
 - `llm_client: Client<OpenAIConfig>` — the OpenAI-compatible API client
-- `tools: Vec<Box<dyn AgentTool + Send + Sync>>` — registered tools (currently empty)
+- `tools: Vec<Box<dyn AgentTool + Send + Sync>>` — registered builtin and MCP-backed tools
 
 **Key methods:**
 - `call()` — non-streaming chat completion
@@ -103,18 +122,22 @@ Default preset: id `"default"`, name `"Cowork Agent"`, model `"mimo-v2.5"`.
 
 ### `AgentTool` (`agent_tool.rs`)
 
-Trait for synchronous tool execution:
+Trait for async tool execution:
 
 ```rust
 pub trait AgentTool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters_json(&self) -> &str;      // JSON schema
-    fn execute(&self, json_input: &str) -> anyhow::Result<String>;
+    async fn execute(&self, json_input: &str) -> anyhow::Result<String>;
 }
 ```
 
-No concrete implementations exist yet. Tool call deltas from the API are accumulated but not executed.
+The default runtime registers `GetCurrentTimeTool`. MCP tools are discovered
+from `mcp-servers.json`, then exposed to OpenAI-compatible function calling
+through `McpToolAdapter`. The orchestrator owns both the MCP client manager and a
+dedicated Tokio runtime so stdio server connections remain alive after startup
+discovery.
 
 ## Module: `src/app/` — UI System
 
@@ -192,7 +215,7 @@ Window size: 1100×720 pixels.
 **`settings_dialog()`** — 760×500px modal:
 - **General** tab: theme, window, font status
 - **Agent** tab: preset info, model, parameters (read-only)
-- **Tools** tab: runtime status, MCP (planned)
+- **Tools** tab: runtime status, MCP server and tool counts
 - **Storage** tab: SQLite info, message count
 
 ## Module: `src/repo/` — Persistence System
@@ -334,9 +357,9 @@ ChatStreamCompleted(final_content)
 
 1. **Compile-time presets** — Agent configuration is hardcoded as `&'static str` constants. No runtime configuration exists yet.
 
-2. **Tool system defined but unused** — The `AgentTool` trait is fully specified, and `Agent` holds a tools vec, but no tools are registered and tool call deltas are accumulated but not executed.
-
-3. **Synchronous tool execution** — `AgentTool::execute()` is synchronous despite the async architecture, suggesting tools are expected to be fast local operations.
+2. **MCP tools are runtime-discovered** — Tool schemas come from MCP servers at
+startup. If a server is unavailable, the app logs a warning and continues with
+the remaining tools.
 
 4. **Upsert-based persistence** — All writes use `INSERT ... ON CONFLICT DO UPDATE`, making operations idempotent. Message IDs encode session and sequence.
 
@@ -348,7 +371,8 @@ ChatStreamCompleted(final_content)
 
 8. **Schema-on-read pattern** — `RecordSchema::create_table_sql()` returns full DDL strings. `init_record<T>()` ensures tables exist before operations.
 
-9. **MCP placeholders** — Empty files exist for future Model Context Protocol tool integration.
+9. **Filesystem MCP access is explicit** — The filesystem server only receives
+the roots listed in `mcp-servers.json`.
 
 10. **No LLM provider abstraction** — The agent is tightly coupled to OpenAI-compatible APIs via `async-openai`.
 
