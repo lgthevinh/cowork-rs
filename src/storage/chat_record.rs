@@ -1,5 +1,6 @@
 use crate::log::ilog::ILog;
-use crate::repo::RecordSchema;
+use crate::record::RecordSchema;
+use serde::{Deserialize, Serialize};
 
 const TAG: &str = "RecordSchema";
 
@@ -8,7 +9,7 @@ pub const MESSAGE_ROLE_ASSISTANT: u16 = 1;
 pub const MESSAGE_ROLE_USER: u16 = 2;
 pub const MESSAGE_ROLE_TOOL: u16 = 3;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
     pub session_id: String,
     pub title: String,
@@ -20,7 +21,7 @@ pub struct SessionRecord {
     pub top_k: i16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageRecord {
     pub message_id: String,
     pub session_id: String,

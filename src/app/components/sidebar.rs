@@ -3,7 +3,7 @@ use iced::{Element, Length, alignment};
 use iced_fonts::octicons;
 
 use super::super::{Message, theme};
-use crate::repo::record::record_impl::SessionRecord;
+use crate::storage::chat_record::SessionRecord;
 
 pub(in crate::app) fn sidebar<'a>(
     active_session_id: &'a str,

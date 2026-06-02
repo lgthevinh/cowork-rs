@@ -1,17 +1,17 @@
-use super::repo_filter::RepoFilter;
+use super::record_filter::RecordFilter;
 use crate::log::ilog::ILog;
 use anyhow::bail;
 
-const TAG: &str = "Repo";
+const TAG: &str = "RecordOperation";
 
-pub trait Repo<T> {
+pub trait RecordOperation<T> {
     fn read_all(&self) -> anyhow::Result<Vec<T>>;
-    fn read(&self, filters: &[RepoFilter]) -> anyhow::Result<Vec<T>>;
+    fn read(&self, filters: &[RecordFilter]) -> anyhow::Result<Vec<T>>;
     fn upsert(&self, item: T) -> anyhow::Result<()>;
-    fn delete(&self, filters: &[RepoFilter]) -> anyhow::Result<()>;
+    fn delete(&self, filters: &[RecordFilter]) -> anyhow::Result<()>;
 }
 
-pub fn build_where_clause(filters: &[RepoFilter]) -> anyhow::Result<String> {
+pub fn build_where_clause(filters: &[RecordFilter]) -> anyhow::Result<String> {
     ILog::d(
         TAG,
         &format!("build_where_clause: filters={}", filters.len()),
@@ -19,7 +19,7 @@ pub fn build_where_clause(filters: &[RepoFilter]) -> anyhow::Result<String> {
 
     if filters.is_empty() {
         ILog::d(TAG, "build_where_clause: rejected empty filters");
-        bail!("repo filters cannot be empty");
+        bail!("record filters cannot be empty");
     }
 
     let predicates = filters

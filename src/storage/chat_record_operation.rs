@@ -1,55 +1,54 @@
 use rusqlite::{Connection, Row, ToSql, params};
 
 use crate::log::ilog::ILog;
-use crate::repo::record::record_impl::{MessageRecord, SessionRecord};
+use crate::record::{
+    RecordFilter, RecordOperation, SqliteDb, record_operation::build_where_clause,
+};
+use crate::storage::chat_record::{MessageRecord, SessionRecord};
 
-use super::repo::{Repo, build_where_clause};
-use super::repo_filter::RepoFilter;
-use super::sqlite_db::SqliteDb;
+const SESSION_TAG: &str = "SessionRecordOperation";
+const MESSAGE_TAG: &str = "MessageRecordOperation";
+const TAG: &str = "ChatRecordOperation";
 
-const SESSION_TAG: &str = "SessionRepo";
-const MESSAGE_TAG: &str = "MessageRepo";
-const TAG: &str = "RepoImpl";
-
-pub struct SessionRepo<'a> {
+pub struct SessionRecordOperation<'a> {
     conn: &'a Connection,
 }
 
-impl<'a> SessionRepo<'a> {
+impl<'a> SessionRecordOperation<'a> {
     pub fn new(db: &'a SqliteDb) -> Self {
-        ILog::d(SESSION_TAG, "new: creating repository from SqliteDb");
+        ILog::d(SESSION_TAG, "new: creating record operation from SqliteDb");
         Self { conn: db.conn() }
     }
 
     pub fn from_conn(conn: &'a Connection) -> Self {
         ILog::d(
             SESSION_TAG,
-            "from_conn: creating repository from connection",
+            "from_conn: creating record operation from connection",
         );
         Self { conn }
     }
 }
 
-pub struct MessageRepo<'a> {
+pub struct MessageRecordOperation<'a> {
     conn: &'a Connection,
 }
 
-impl<'a> MessageRepo<'a> {
+impl<'a> MessageRecordOperation<'a> {
     pub fn new(db: &'a SqliteDb) -> Self {
-        ILog::d(MESSAGE_TAG, "new: creating repository from SqliteDb");
+        ILog::d(MESSAGE_TAG, "new: creating record operation from SqliteDb");
         Self { conn: db.conn() }
     }
 
     pub fn from_conn(conn: &'a Connection) -> Self {
         ILog::d(
             MESSAGE_TAG,
-            "from_conn: creating repository from connection",
+            "from_conn: creating record operation from connection",
         );
         Self { conn }
     }
 }
 
-impl Repo<SessionRecord> for SessionRepo<'_> {
+impl RecordOperation<SessionRecord> for SessionRecordOperation<'_> {
     fn read_all(&self) -> anyhow::Result<Vec<SessionRecord>> {
         ILog::d(SESSION_TAG, "read_all: start");
         let mut statement = self.conn.prepare(
@@ -79,7 +78,7 @@ impl Repo<SessionRecord> for SessionRepo<'_> {
         Ok(records)
     }
 
-    fn read(&self, filters: &[RepoFilter]) -> anyhow::Result<Vec<SessionRecord>> {
+    fn read(&self, filters: &[RecordFilter]) -> anyhow::Result<Vec<SessionRecord>> {
         ILog::d(
             SESSION_TAG,
             &format!("read: start filters={}", filters.len()),
@@ -170,7 +169,7 @@ impl Repo<SessionRecord> for SessionRepo<'_> {
         Ok(())
     }
 
-    fn delete(&self, filters: &[RepoFilter]) -> anyhow::Result<()> {
+    fn delete(&self, filters: &[RecordFilter]) -> anyhow::Result<()> {
         ILog::d(
             SESSION_TAG,
             &format!("delete: start filters={}", filters.len()),
@@ -189,7 +188,7 @@ impl Repo<SessionRecord> for SessionRepo<'_> {
     }
 }
 
-impl Repo<MessageRecord> for MessageRepo<'_> {
+impl RecordOperation<MessageRecord> for MessageRecordOperation<'_> {
     fn read_all(&self) -> anyhow::Result<Vec<MessageRecord>> {
         ILog::d(MESSAGE_TAG, "read_all: start");
         let mut statement = self.conn.prepare(
@@ -217,7 +216,7 @@ impl Repo<MessageRecord> for MessageRepo<'_> {
         Ok(records)
     }
 
-    fn read(&self, filters: &[RepoFilter]) -> anyhow::Result<Vec<MessageRecord>> {
+    fn read(&self, filters: &[RecordFilter]) -> anyhow::Result<Vec<MessageRecord>> {
         ILog::d(
             MESSAGE_TAG,
             &format!("read: start filters={}", filters.len()),
@@ -302,7 +301,7 @@ impl Repo<MessageRecord> for MessageRepo<'_> {
         Ok(())
     }
 
-    fn delete(&self, filters: &[RepoFilter]) -> anyhow::Result<()> {
+    fn delete(&self, filters: &[RecordFilter]) -> anyhow::Result<()> {
         ILog::d(
             MESSAGE_TAG,
             &format!("delete: start filters={}", filters.len()),
@@ -321,7 +320,7 @@ impl Repo<MessageRecord> for MessageRepo<'_> {
     }
 }
 
-fn filter_params(filters: &[RepoFilter]) -> Vec<&dyn ToSql> {
+fn filter_params(filters: &[RecordFilter]) -> Vec<&dyn ToSql> {
     ILog::d(TAG, &format!("filter_params: filters={}", filters.len()));
     filters
         .iter()

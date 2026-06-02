@@ -1,15 +1,15 @@
 use crate::log::ilog::ILog;
 use rusqlite::types::Value;
 
-const TAG: &str = "RepoFilter";
+const TAG: &str = "RecordFilter";
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct RepoFilter {
+pub struct RecordFilter {
     pub column: &'static str,
     pub value: Value,
 }
 
-impl RepoFilter {
+impl RecordFilter {
     pub fn text(column: &'static str, value: impl Into<String>) -> Self {
         let value = value.into();
         ILog::d(

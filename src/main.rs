@@ -1,17 +1,18 @@
 mod agent;
 mod app;
 mod log;
-mod repo;
+mod record;
+mod storage;
 
 use agent::agent_orchestrator;
-use repo::record::record_impl;
+use storage::chat_record;
 
 fn main() -> iced::Result {
-    // init repo
-    let db = repo::SqliteDb::open("data.db").expect("failed to open sqlite database");
-    db.init_record::<record_impl::SessionRecord>()
+    // init record storage
+    let db = record::SqliteDb::open("data.db").expect("failed to open sqlite database");
+    db.init_record::<chat_record::SessionRecord>()
         .expect("failed to initialize session schema");
-    db.init_record::<record_impl::MessageRecord>()
+    db.init_record::<chat_record::MessageRecord>()
         .expect("failed to initialize message schema");
 
     // init agent orchestrator

@@ -1,5 +1,5 @@
-use super::RecordSchema;
 use crate::log::ilog::ILog;
+use crate::record::RecordSchema;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
