@@ -1,5 +1,6 @@
 use crate::log::ilog::ILog;
-use crate::record::RecordSchema;
+use crate::record::{RecordSchema, SqliteRecord};
+use rusqlite::{Row, ToSql};
 use serde::{Deserialize, Serialize};
 
 const TAG: &str = "RecordSchema";
@@ -57,6 +58,94 @@ impl RecordSchema for SessionRecord {
     }
 }
 
+impl SqliteRecord for SessionRecord {
+    fn select_all_sql() -> &'static str {
+        r#"
+        SELECT
+            session_id,
+            title,
+            model,
+            created_at,
+            updated_at,
+            temperature,
+            top_p,
+            top_k
+        FROM sessions
+        ORDER BY updated_at DESC
+        "#
+    }
+
+    fn select_filtered_sql(where_clause: &str) -> String {
+        format!(
+            r#"
+            SELECT
+                session_id,
+                title,
+                model,
+                created_at,
+                updated_at,
+                temperature,
+                top_p,
+                top_k
+            FROM sessions
+            {where_clause}
+            ORDER BY updated_at DESC
+            "#
+        )
+    }
+
+    fn upsert_sql() -> &'static str {
+        r#"
+        INSERT INTO sessions (
+            session_id,
+            title,
+            model,
+            created_at,
+            updated_at,
+            temperature,
+            top_p,
+            top_k
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        ON CONFLICT(session_id) DO UPDATE SET
+            title = excluded.title,
+            model = excluded.model,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            temperature = excluded.temperature,
+            top_p = excluded.top_p,
+            top_k = excluded.top_k
+        "#
+    }
+
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        ILog::d(TAG, "SessionRecord::from_row: mapping row");
+        Ok(Self {
+            session_id: row.get("session_id")?,
+            title: row.get("title")?,
+            model: row.get("model")?,
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+            temperature: row.get("temperature")?,
+            top_p: row.get("top_p")?,
+            top_k: row.get("top_k")?,
+        })
+    }
+
+    fn upsert_params(&self) -> Vec<&dyn ToSql> {
+        vec![
+            &self.session_id,
+            &self.title,
+            &self.model,
+            &self.created_at,
+            &self.updated_at,
+            &self.temperature,
+            &self.top_p,
+            &self.top_k,
+        ]
+    }
+}
+
 impl RecordSchema for MessageRecord {
     fn table_name() -> &'static str {
         ILog::d(TAG, "MessageRecord::table_name: messages");
@@ -81,5 +170,81 @@ impl RecordSchema for MessageRecord {
         CREATE INDEX IF NOT EXISTS idx_messages_session_sequence
             ON messages(session_id, sequence);
         "#
+    }
+}
+
+impl SqliteRecord for MessageRecord {
+    fn select_all_sql() -> &'static str {
+        r#"
+        SELECT
+            message_id,
+            session_id,
+            sequence,
+            role,
+            content,
+            created_at
+        FROM messages
+        ORDER BY session_id, sequence
+        "#
+    }
+
+    fn select_filtered_sql(where_clause: &str) -> String {
+        format!(
+            r#"
+            SELECT
+                message_id,
+                session_id,
+                sequence,
+                role,
+                content,
+                created_at
+            FROM messages
+            {where_clause}
+            ORDER BY sequence
+            "#
+        )
+    }
+
+    fn upsert_sql() -> &'static str {
+        r#"
+        INSERT INTO messages (
+            message_id,
+            session_id,
+            sequence,
+            role,
+            content,
+            created_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        ON CONFLICT(message_id) DO UPDATE SET
+            session_id = excluded.session_id,
+            sequence = excluded.sequence,
+            role = excluded.role,
+            content = excluded.content,
+            created_at = excluded.created_at
+        "#
+    }
+
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        ILog::d(TAG, "MessageRecord::from_row: mapping row");
+        Ok(Self {
+            message_id: row.get("message_id")?,
+            session_id: row.get("session_id")?,
+            sequence: row.get("sequence")?,
+            role: row.get("role")?,
+            content: row.get("content")?,
+            created_at: row.get("created_at")?,
+        })
+    }
+
+    fn upsert_params(&self) -> Vec<&dyn ToSql> {
+        vec![
+            &self.message_id,
+            &self.session_id,
+            &self.sequence,
+            &self.role,
+            &self.content,
+            &self.created_at,
+        ]
     }
 }

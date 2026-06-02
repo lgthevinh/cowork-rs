@@ -9,10 +9,10 @@ use storage::chat_record;
 
 fn main() -> iced::Result {
     // init record storage
-    let db = record::SqliteDb::open("data.db").expect("failed to open sqlite database");
-    db.init_record::<chat_record::SessionRecord>()
+    let db = record::RecordSqlite::open("data.db").expect("failed to open sqlite record storage");
+    db.init::<chat_record::SessionRecord>()
         .expect("failed to initialize session schema");
-    db.init_record::<chat_record::MessageRecord>()
+    db.init::<chat_record::MessageRecord>()
         .expect("failed to initialize message schema");
 
     // init agent orchestrator

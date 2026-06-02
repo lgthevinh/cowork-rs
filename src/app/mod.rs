@@ -18,12 +18,11 @@ use crate::agent::{
     agent::AgentStreamCallback,
     agent_orchestrator::{self, AgentOrchestrator},
 };
-use crate::record::{RecordFilter, RecordOperation, SqliteDb};
+use crate::record::{RecordFilter, RecordSqlite};
 use crate::storage::chat_record::{
     MESSAGE_ROLE_ASSISTANT, MESSAGE_ROLE_SYSTEM, MESSAGE_ROLE_TOOL, MESSAGE_ROLE_USER,
     MessageRecord, SessionRecord,
 };
-use crate::storage::chat_record_operation::{MessageRecordOperation, SessionRecordOperation};
 
 const INITIAL_RECENT_SESSION_COUNT: usize = 5;
 const RECENT_SESSION_PAGE_SIZE: usize = 5;
@@ -44,7 +43,7 @@ const EMOJI_FONT_CANDIDATES: &[&str] = &[
 ];
 pub(super) const EMOJI_FONT: iced::Font = iced::Font::with_name("Noto Emoji");
 
-pub fn run(db: SqliteDb, agent_orchestrator: AgentOrchestrator) -> iced::Result {
+pub fn run(db: RecordSqlite, agent_orchestrator: AgentOrchestrator) -> iced::Result {
     let db = Rc::new(db);
     let mcp_server_count = agent_orchestrator.mcp_server_count();
     let mcp_tool_count = agent_orchestrator.mcp_tool_count();
@@ -259,7 +258,7 @@ impl ChatMessage {
 }
 
 struct CoworkApp {
-    db: Rc<SqliteDb>,
+    db: Rc<RecordSqlite>,
     db_path: PathBuf,
     agent_orchestrator: Arc<AgentOrchestrator>,
     session_id: String,
@@ -285,7 +284,7 @@ struct CoworkApp {
 
 impl CoworkApp {
     fn new(
-        db: Rc<SqliteDb>,
+        db: Rc<RecordSqlite>,
         agent_orchestrator: Arc<AgentOrchestrator>,
         mcp_server_count: usize,
         mcp_tool_count: usize,
@@ -583,9 +582,7 @@ impl CoworkApp {
     }
 
     fn persist_session(&self, updated_at: i64) -> anyhow::Result<()> {
-        let operation = SessionRecordOperation::new(&self.db);
-
-        operation.upsert(SessionRecord {
+        self.db.upsert(SessionRecord {
             session_id: self.session_id.clone(),
             title: self.session_title.clone(),
             model: self.session_model.clone(),
@@ -619,9 +616,7 @@ impl CoworkApp {
     }
 
     fn refresh_recent_sessions(&mut self) {
-        let operation = SessionRecordOperation::new(&self.db);
-
-        match operation.read_all() {
+        match self.db.read_all::<SessionRecord>() {
             Ok(sessions) => {
                 self.recent_sessions = sessions;
                 self.visible_session_count = normalized_visible_session_count(
@@ -689,7 +684,8 @@ impl CoworkApp {
     }
 
     fn load_session_messages(&self, session_id: &str) -> anyhow::Result<Vec<MessageRecord>> {
-        MessageRecordOperation::new(&self.db).read(&[RecordFilter::text("session_id", session_id)])
+        self.db
+            .read::<MessageRecord>(&[RecordFilter::text("session_id", session_id)])
     }
 
     fn delete_session(&mut self, session_id: &str) {
@@ -714,8 +710,8 @@ impl CoworkApp {
 
     fn delete_session_records(&self, session_id: &str) -> anyhow::Result<()> {
         let filters = [RecordFilter::text("session_id", session_id)];
-        MessageRecordOperation::new(&self.db).delete(&filters)?;
-        SessionRecordOperation::new(&self.db).delete(&filters)?;
+        self.db.delete::<MessageRecord>(&filters)?;
+        self.db.delete::<SessionRecord>(&filters)?;
 
         Ok(())
     }
@@ -724,9 +720,7 @@ impl CoworkApp {
         let sequence = self.next_sequence;
         self.next_sequence += 1;
 
-        let operation = MessageRecordOperation::new(&self.db);
-
-        operation.upsert(MessageRecord {
+        self.db.upsert(MessageRecord {
             message_id: format!("{}-{sequence}", self.session_id),
             session_id: self.session_id.clone(),
             sequence,
