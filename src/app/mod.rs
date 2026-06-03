@@ -18,10 +18,14 @@ use crate::agent::{
     agent::AgentStreamCallback,
     agent_orchestrator::{self, AgentOrchestrator},
 };
+use crate::record::record_file::RecordFile;
 use crate::record::{RecordFilter, RecordSqlite};
 use crate::storage::chat_record::{
     MESSAGE_ROLE_ASSISTANT, MESSAGE_ROLE_SYSTEM, MESSAGE_ROLE_TOOL, MESSAGE_ROLE_USER,
     MessageRecord, SessionRecord,
+};
+use crate::storage::llm_provider_config::{
+    LLM_PROVIDER_CONFIG_PATH, LlmModelConfig, LlmProviderConfig,
 };
 
 const INITIAL_RECENT_SESSION_COUNT: usize = 5;
@@ -78,6 +82,15 @@ pub(super) enum Message {
     OpenSettings,
     CloseSettings,
     SettingsTabSelected(SettingsTab),
+    LlmProviderNameChanged(String),
+    LlmBaseUrlChanged(String),
+    LlmApiKeyChanged(String),
+    LlmDefaultModelChanged(String),
+    LlmModelsChanged(String),
+    ChangeLlmProviderConfig,
+    CancelLlmProviderConfigChange,
+    SaveLlmProviderConfig,
+    ReloadLlmProviderConfig,
     IconFontLoaded(Result<(), font::Error>),
     EmojiFontBytesLoaded(Result<(String, Vec<u8>), String>),
     EmojiFontLoaded(String, Result<(), font::Error>),
@@ -275,6 +288,13 @@ struct CoworkApp {
     is_emoji_font_loaded: bool,
     emoji_font_path: Option<String>,
     emoji_font_error: Option<String>,
+    llm_provider_name: String,
+    llm_base_url: String,
+    llm_api_key: String,
+    llm_default_model: String,
+    llm_models: String,
+    is_llm_provider_changing: bool,
+    llm_config_status: Option<String>,
     messages: Vec<ChatMessage>,
     streaming_assistant_index: Option<usize>,
     is_waiting_for_agent: bool,
@@ -294,9 +314,16 @@ impl CoworkApp {
         let session_title = String::from("New session");
         let session_model = agent_orchestrator
             .default_agent()
-            .map(|agent| agent.model().to_owned())
+            .map(|agent| agent.model())
             .unwrap_or_else(|| String::from("unknown"));
         let db_path = db.resolved_path();
+        let (llm_provider_form, llm_config_status) = match load_llm_provider_form() {
+            Ok(form) => (form, None),
+            Err(error) => (
+                LlmProviderForm::from_config(&LlmProviderConfig::default_config()),
+                Some(format!("Failed to load provider config: {error}")),
+            ),
+        };
 
         let mut app = Self {
             db_path,
@@ -316,6 +343,13 @@ impl CoworkApp {
             is_emoji_font_loaded: false,
             emoji_font_path: None,
             emoji_font_error: None,
+            llm_provider_name: llm_provider_form.provider_name,
+            llm_base_url: llm_provider_form.base_url,
+            llm_api_key: llm_provider_form.api_key,
+            llm_default_model: llm_provider_form.default_model,
+            llm_models: llm_provider_form.models,
+            is_llm_provider_changing: false,
+            llm_config_status,
             messages: Vec::new(),
             streaming_assistant_index: None,
             is_waiting_for_agent: false,
@@ -391,6 +425,48 @@ impl CoworkApp {
             Message::SettingsTabSelected(tab) => {
                 self.settings_tab = tab;
                 self.is_settings_open = true;
+                Task::none()
+            }
+            Message::LlmProviderNameChanged(value) => {
+                self.llm_provider_name = value;
+                self.llm_config_status = None;
+                Task::none()
+            }
+            Message::LlmBaseUrlChanged(value) => {
+                self.llm_base_url = value;
+                self.llm_config_status = None;
+                Task::none()
+            }
+            Message::LlmApiKeyChanged(value) => {
+                self.llm_api_key = value;
+                self.llm_config_status = None;
+                Task::none()
+            }
+            Message::LlmDefaultModelChanged(value) => {
+                self.llm_default_model = value;
+                self.llm_config_status = None;
+                Task::none()
+            }
+            Message::LlmModelsChanged(value) => {
+                self.llm_models = value;
+                self.llm_config_status = None;
+                Task::none()
+            }
+            Message::ChangeLlmProviderConfig => {
+                self.is_llm_provider_changing = true;
+                self.llm_config_status = None;
+                Task::none()
+            }
+            Message::CancelLlmProviderConfigChange => {
+                self.cancel_llm_provider_config_change();
+                Task::none()
+            }
+            Message::SaveLlmProviderConfig => {
+                self.save_llm_provider_config();
+                Task::none()
+            }
+            Message::ReloadLlmProviderConfig => {
+                self.reload_llm_provider_config();
                 Task::none()
             }
             Message::IconFontLoaded(result) => {
@@ -632,6 +708,104 @@ impl CoworkApp {
         }
     }
 
+    fn save_llm_provider_config(&mut self) {
+        let config = self.llm_provider_config_from_form();
+        let result = (|| -> anyhow::Result<()> {
+            config.validate_resolved()?;
+            let record_file = RecordFile::open(LLM_PROVIDER_CONFIG_PATH)?;
+            record_file.write(&config)?;
+            self.agent_orchestrator.load_provider_config()?;
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                self.session_model = self.active_agent_model();
+                self.is_llm_provider_changing = false;
+                self.llm_config_status = Some(String::from("Saved"));
+            }
+            Err(error) => {
+                self.llm_config_status = Some(format!("Save failed: {error}"));
+            }
+        }
+    }
+
+    fn cancel_llm_provider_config_change(&mut self) {
+        match load_llm_provider_form() {
+            Ok(form) => {
+                self.apply_llm_provider_form(form);
+                self.is_llm_provider_changing = false;
+                self.llm_config_status = None;
+            }
+            Err(error) => {
+                self.llm_config_status = Some(format!("Cancel failed: {error}"));
+            }
+        }
+    }
+
+    fn reload_llm_provider_config(&mut self) {
+        let result = (|| -> anyhow::Result<LlmProviderForm> {
+            let form = load_llm_provider_form()?;
+            self.agent_orchestrator.load_provider_config()?;
+            Ok(form)
+        })();
+
+        match result {
+            Ok(form) => {
+                self.apply_llm_provider_form(form);
+                self.session_model = self.active_agent_model();
+                self.is_llm_provider_changing = false;
+                self.llm_config_status = Some(String::from("Reloaded"));
+            }
+            Err(error) => {
+                self.llm_config_status = Some(format!("Reload failed: {error}"));
+            }
+        }
+    }
+
+    fn apply_llm_provider_form(&mut self, form: LlmProviderForm) {
+        self.llm_provider_name = form.provider_name;
+        self.llm_base_url = form.base_url;
+        self.llm_api_key = form.api_key;
+        self.llm_default_model = form.default_model;
+        self.llm_models = form.models;
+    }
+
+    fn llm_provider_config_from_form(&self) -> LlmProviderConfig {
+        let default_model = self.llm_default_model.trim().to_owned();
+        let models = parse_model_list(&self.llm_models, &default_model);
+
+        LlmProviderConfig {
+            provider_name: self.llm_provider_name.trim().to_owned(),
+            base_url: self.llm_base_url.trim().to_owned(),
+            api_key: self.llm_api_key.trim().to_owned(),
+            default_model,
+            models,
+        }
+    }
+
+    fn llm_api_key_status(&self) -> String {
+        if !self.llm_api_key.trim().is_empty() {
+            return String::from("Saved");
+        }
+
+        if std::env::var("OPENAI_API_KEY")
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return String::from("Using computer setting");
+        }
+
+        String::from("Missing")
+    }
+
+    fn active_agent_model(&self) -> String {
+        self.agent_orchestrator
+            .default_agent()
+            .map(|agent| agent.model())
+            .unwrap_or_else(|| String::from("unknown"))
+    }
+
     fn select_session(&mut self, session_id: &str) {
         let session = self
             .recent_sessions
@@ -792,11 +966,21 @@ impl CoworkApp {
         .style(theme::app_background);
 
         if self.is_settings_open {
+            let llm_api_key_status = self.llm_api_key_status();
+
             stack![
                 shell,
                 components::settings_dialog(
                     self.settings_tab,
                     &self.session_model,
+                    &self.llm_provider_name,
+                    &self.llm_base_url,
+                    &self.llm_api_key,
+                    llm_api_key_status,
+                    &self.llm_default_model,
+                    &self.llm_models,
+                    self.is_llm_provider_changing,
+                    self.llm_config_status.clone(),
                     self.messages.len(),
                     self.db_path.display().to_string(),
                     self.is_icon_font_loaded,
@@ -1029,6 +1213,61 @@ fn normalized_visible_session_count(current: usize, total: usize) -> usize {
     } else {
         current.clamp(INITIAL_RECENT_SESSION_COUNT, total)
     }
+}
+
+struct LlmProviderForm {
+    provider_name: String,
+    base_url: String,
+    api_key: String,
+    default_model: String,
+    models: String,
+}
+
+impl LlmProviderForm {
+    fn from_config(config: &LlmProviderConfig) -> Self {
+        Self {
+            provider_name: config.provider_name.clone(),
+            base_url: config.base_url.clone(),
+            api_key: config.api_key.clone(),
+            default_model: config.default_model.clone(),
+            models: config
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        }
+    }
+}
+
+fn load_llm_provider_form() -> anyhow::Result<LlmProviderForm> {
+    let record_file = RecordFile::open(LLM_PROVIDER_CONFIG_PATH)?;
+    record_file.init(&LlmProviderConfig::default_config())?;
+    let config: LlmProviderConfig = record_file.read()?;
+
+    Ok(LlmProviderForm::from_config(&config))
+}
+
+fn parse_model_list(models: &str, default_model: &str) -> Vec<LlmModelConfig> {
+    let mut parsed = models
+        .split(|ch| ch == ',' || ch == '\n')
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(|model| LlmModelConfig {
+            id: model.to_owned(),
+            display_name: model.to_owned(),
+        })
+        .collect::<Vec<_>>();
+
+    if parsed.is_empty() && !default_model.trim().is_empty() {
+        let model = default_model.trim().to_owned();
+        parsed.push(LlmModelConfig {
+            id: model.clone(),
+            display_name: model,
+        });
+    }
+
+    parsed
 }
 
 async fn load_emoji_font_bytes() -> Result<(String, Vec<u8>), String> {

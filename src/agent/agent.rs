@@ -13,6 +13,7 @@ use async_openai::{
 };
 use futures_util::StreamExt;
 use std::collections::BTreeMap;
+use std::sync::RwLock;
 
 const MAX_TOOL_ITERATIONS: usize = 10;
 
@@ -38,9 +39,13 @@ pub struct Agent {
     id: String,
     name: String,
     system_instruction: String,
+    llm_runtime: RwLock<AgentLlmRuntime>,
+    tools: Vec<Box<dyn AgentTool + Send + Sync>>,
+}
+
+struct AgentLlmRuntime {
     model: String,
     llm_client: Client<OpenAIConfig>,
-    tools: Vec<Box<dyn AgentTool + Send + Sync>>,
 }
 
 impl Agent {
@@ -56,8 +61,7 @@ impl Agent {
             id,
             name,
             system_instruction,
-            model,
-            llm_client,
+            llm_runtime: RwLock::new(AgentLlmRuntime { model, llm_client }),
             tools,
         }
     }
@@ -74,21 +78,45 @@ impl Agent {
         &self.system_instruction
     }
 
-    pub fn model(&self) -> &str {
-        &self.model
+    pub fn model(&self) -> String {
+        self.llm_runtime
+            .read()
+            .map(|runtime| runtime.model.clone())
+            .unwrap_or_else(|_| String::from("unknown"))
     }
 
-    pub fn llm_client(&self) -> &Client<OpenAIConfig> {
-        &self.llm_client
+    pub fn llm_client(&self) -> anyhow::Result<Client<OpenAIConfig>> {
+        Ok(self
+            .llm_runtime
+            .read()
+            .map_err(|_| anyhow::anyhow!("agent llm runtime lock is poisoned"))?
+            .llm_client
+            .clone())
+    }
+
+    pub fn set_llm_config(
+        &self,
+        model: String,
+        llm_client: Client<OpenAIConfig>,
+    ) -> anyhow::Result<()> {
+        let mut runtime = self
+            .llm_runtime
+            .write()
+            .map_err(|_| anyhow::anyhow!("agent llm runtime lock is poisoned"))?;
+
+        runtime.model = model;
+        runtime.llm_client = llm_client;
+
+        Ok(())
     }
 
     pub async fn call(
         &self,
         messages: Vec<ChatCompletionRequestMessage>,
     ) -> anyhow::Result<CreateChatCompletionResponse> {
-        let request = self.build_request(messages, false)?;
+        let (llm_client, request) = self.build_request(messages, false)?;
 
-        Ok(self.llm_client.chat().create(request).await?)
+        Ok(llm_client.chat().create(request).await?)
     }
 
     pub async fn call_stream(
@@ -159,8 +187,8 @@ impl Agent {
         messages: &[ChatCompletionRequestMessage],
         callback: &dyn AgentStreamCallback,
     ) -> anyhow::Result<AgentResponse> {
-        let request = self.build_request(messages.to_vec(), true)?;
-        let mut stream = match self.llm_client.chat().create_stream(request).await {
+        let (llm_client, request) = self.build_request(messages.to_vec(), true)?;
+        let mut stream = match llm_client.chat().create_stream(request).await {
             Ok(stream) => stream,
             Err(error) => {
                 let error = anyhow::Error::from(error).context("failed to create chat stream");
@@ -205,7 +233,15 @@ impl Agent {
         &self,
         messages: Vec<ChatCompletionRequestMessage>,
         stream: bool,
-    ) -> anyhow::Result<CreateChatCompletionRequest> {
+    ) -> anyhow::Result<(Client<OpenAIConfig>, CreateChatCompletionRequest)> {
+        let runtime = self
+            .llm_runtime
+            .read()
+            .map_err(|_| anyhow::anyhow!("agent llm runtime lock is poisoned"))?;
+        let model = runtime.model.clone();
+        let llm_client = runtime.llm_client.clone();
+        drop(runtime);
+
         let mut request_messages = Vec::with_capacity(messages.len() + 1);
 
         request_messages.push(
@@ -217,7 +253,7 @@ impl Agent {
         request_messages.extend(messages);
 
         let mut request = CreateChatCompletionRequestArgs::default();
-        request.model(self.model()).messages(request_messages);
+        request.model(model).messages(request_messages);
 
         if !self.tools.is_empty() {
             let chat_tools: Vec<ChatCompletionTool> = self
@@ -248,7 +284,7 @@ impl Agent {
                 });
         }
 
-        Ok(request.build()?)
+        Ok((llm_client, request.build()?))
     }
 }
 

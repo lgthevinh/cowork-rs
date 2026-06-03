@@ -1,4 +1,4 @@
-use anyhow::{Context, bail};
+use anyhow::Context;
 use async_openai::{
     Client,
     config::OpenAIConfig,
@@ -11,6 +11,8 @@ use serde::Deserialize;
 use std::{collections::BTreeMap, fs, path::Path};
 
 use crate::log::ilog::ILog;
+use crate::record::record_file::RecordFile;
+use crate::storage::llm_provider_config::{LLM_PROVIDER_CONFIG_PATH, LlmProviderConfig};
 
 use super::agent::{Agent, AgentResponse, AgentStreamCallback};
 use super::agent_preset::DEFAULT_AGENT_PRESET;
@@ -18,7 +20,6 @@ use super::agent_tool::AgentTool;
 use super::tool::builtin::time_tool::GetCurrentTimeTool;
 use super::tool::mcp::mcp_client::McpClientManager;
 
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const MCP_SERVERS_CONFIG_PATH: &str = "mcp-servers.json";
 const TAG: &str = "AgentOrchestrator";
 
@@ -57,6 +58,27 @@ impl AgentOrchestrator {
 
     pub fn mcp_tool_count(&self) -> usize {
         self.mcp_tool_count
+    }
+
+    pub fn load_provider_config(&self) -> anyhow::Result<LlmProviderConfig> {
+        ILog::d(TAG, "load_provider_config: start");
+        let provider_config = load_provider_config()?;
+        let runtime_config = AgentRuntimeConfig::from_provider_config(&provider_config)?;
+        let llm_client = openai_client_from_runtime_config(&runtime_config);
+
+        for agent in &self.agents {
+            agent.set_llm_config(runtime_config.model.clone(), llm_client.clone())?;
+        }
+
+        ILog::d(
+            TAG,
+            &format!(
+                "load_provider_config: completed provider={} base_url={} model={}",
+                provider_config.provider_name, runtime_config.openai_base_url, runtime_config.model
+            ),
+        );
+
+        Ok(provider_config)
     }
 
     pub async fn chat_completion_stream_response(
@@ -100,42 +122,42 @@ impl AgentOrchestrator {
 pub struct AgentRuntimeConfig {
     pub openai_api_key: String,
     pub openai_base_url: String,
+    pub model: String,
 }
 
 impl AgentRuntimeConfig {
-    pub fn from_env() -> anyhow::Result<Self> {
-        ILog::d(TAG, "from_env: loading dotenv and OpenAI configuration");
-        dotenvy::dotenv().ok();
+    pub fn from_provider_config(config: &LlmProviderConfig) -> anyhow::Result<Self> {
+        ILog::d(TAG, "from_provider_config: resolving OpenAI configuration");
+        config.validate_resolved()?;
 
-        let openai_api_key: String = std::env::var("OPENAI_API_KEY")
-            .context("OPENAI_API_KEY is required in the environment or .env")?;
+        let openai_api_key = config.resolved_api_key()?;
+        let openai_base_url = config.resolved_base_url();
+        let model = config.resolved_default_model();
 
-        if openai_api_key.trim().is_empty() {
-            bail!("OPENAI_API_KEY cannot be empty");
-        }
-
-        let openai_base_url = env_or_default("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL);
         ILog::d(
             TAG,
-            &format!("from_env: loaded openai_base_url={openai_base_url}"),
+            &format!(
+                "from_provider_config: loaded openai_base_url={openai_base_url} model={model}"
+            ),
         );
 
         Ok(Self {
             openai_api_key,
             openai_base_url,
+            model,
         })
     }
 }
 
 pub fn init() -> anyhow::Result<AgentOrchestrator> {
     ILog::d(TAG, "init: start");
-    let config = AgentRuntimeConfig::from_env()?;
+    dotenvy::dotenv().ok();
+
+    let provider_config = load_provider_config()?;
+    let config = AgentRuntimeConfig::from_provider_config(&provider_config)?;
     ILog::d(TAG, "init: runtime config loaded");
 
-    let openai_config = OpenAIConfig::new()
-        .with_api_key(config.openai_api_key)
-        .with_api_base(config.openai_base_url);
-    let llm_client = Client::with_config(openai_config);
+    let llm_client = openai_client_from_runtime_config(&config);
     ILog::d(TAG, "init: OpenAI client created");
 
     // Start with builtin tools
@@ -171,7 +193,7 @@ pub fn init() -> anyhow::Result<AgentOrchestrator> {
         DEFAULT_AGENT_PRESET.id.to_owned(),
         DEFAULT_AGENT_PRESET.name.to_owned(),
         DEFAULT_AGENT_PRESET.system_instruction.to_owned(),
-        DEFAULT_AGENT_PRESET.model.to_owned(),
+        config.model,
         llm_client,
         tools,
     );
@@ -181,6 +203,7 @@ pub fn init() -> anyhow::Result<AgentOrchestrator> {
     orchestrator.mcp_tool_count = mcp_tool_count;
     orchestrator._mcp_manager = mcp_manager;
     orchestrator._mcp_runtime = mcp_runtime;
+    orchestrator.load_provider_config()?;
 
     ILog::d(
         TAG,
@@ -193,6 +216,27 @@ pub fn init() -> anyhow::Result<AgentOrchestrator> {
     );
 
     Ok(orchestrator)
+}
+
+fn load_provider_config() -> anyhow::Result<LlmProviderConfig> {
+    ILog::d(
+        TAG,
+        &format!("load_provider_config_file: path={LLM_PROVIDER_CONFIG_PATH}"),
+    );
+
+    let record_file = RecordFile::open(LLM_PROVIDER_CONFIG_PATH)?;
+    record_file.init(&LlmProviderConfig::default_config())?;
+    let config: LlmProviderConfig = record_file.read()?;
+
+    Ok(config)
+}
+
+fn openai_client_from_runtime_config(config: &AgentRuntimeConfig) -> Client<OpenAIConfig> {
+    let openai_config = OpenAIConfig::new()
+        .with_api_key(config.openai_api_key.clone())
+        .with_api_base(config.openai_base_url.clone());
+
+    Client::with_config(openai_config)
 }
 
 /// Initialize MCP tools from local MCP server configuration.
@@ -418,19 +462,6 @@ struct McpServerConfig {
     env: Option<BTreeMap<String, String>>,
     #[serde(default)]
     disabled: bool,
-}
-
-fn env_or_default(key: &str, default: &str) -> String {
-    match std::env::var(key) {
-        Ok(value) => {
-            ILog::d(TAG, &format!("env_or_default: key={key} source=env"));
-            value
-        }
-        Err(_) => {
-            ILog::d(TAG, &format!("env_or_default: key={key} source=default"));
-            default.to_owned()
-        }
-    }
 }
 
 pub fn user_message_request(content: &str) -> anyhow::Result<ChatCompletionRequestMessage> {

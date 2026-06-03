@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, opaque, row, stack, text};
+use iced::widget::{button, column, container, opaque, row, scrollable, stack, text, text_input};
 use iced::{Element, Length, alignment};
 use iced_fonts::octicons;
 
@@ -7,6 +7,14 @@ use super::super::{Message, SettingsTab, theme};
 pub(in crate::app) fn settings_dialog<'a>(
     active_tab: SettingsTab,
     session_model: &'a str,
+    llm_provider_name: &'a str,
+    llm_base_url: &'a str,
+    llm_api_key: &'a str,
+    llm_api_key_status: String,
+    llm_default_model: &'a str,
+    llm_models: &'a str,
+    is_llm_provider_changing: bool,
+    llm_config_status: Option<String>,
     message_count: usize,
     db_path: String,
     is_icon_font_loaded: bool,
@@ -17,22 +25,33 @@ pub(in crate::app) fn settings_dialog<'a>(
     mcp_server_count: usize,
     mcp_tool_count: usize,
 ) -> Element<'a, Message> {
-    let dialog = container(row![
-        settings_sidebar(active_tab),
-        settings_content(
-            active_tab,
-            session_model,
-            message_count,
-            db_path,
-            is_icon_font_loaded,
-            is_emoji_font_loaded,
-            emoji_font_path,
-            emoji_font_error,
-            is_waiting_for_agent,
-            mcp_server_count,
-            mcp_tool_count,
-        ),
-    ])
+    let dialog = container(
+        row![
+            settings_sidebar(active_tab),
+            settings_content(
+                active_tab,
+                session_model,
+                llm_provider_name,
+                llm_base_url,
+                llm_api_key,
+                llm_api_key_status,
+                llm_default_model,
+                llm_models,
+                is_llm_provider_changing,
+                llm_config_status,
+                message_count,
+                db_path,
+                is_icon_font_loaded,
+                is_emoji_font_loaded,
+                emoji_font_path,
+                emoji_font_error,
+                is_waiting_for_agent,
+                mcp_server_count,
+                mcp_tool_count,
+            ),
+        ]
+        .height(Length::Fill),
+    )
     .width(760)
     .height(500)
     .style(theme::settings_dialog);
@@ -114,6 +133,14 @@ fn settings_tab_button(
 fn settings_content<'a>(
     active_tab: SettingsTab,
     session_model: &'a str,
+    llm_provider_name: &'a str,
+    llm_base_url: &'a str,
+    llm_api_key: &'a str,
+    llm_api_key_status: String,
+    llm_default_model: &'a str,
+    llm_models: &'a str,
+    is_llm_provider_changing: bool,
+    llm_config_status: Option<String>,
     message_count: usize,
     db_path: String,
     is_icon_font_loaded: bool,
@@ -131,16 +158,33 @@ fn settings_content<'a>(
             emoji_font_path,
             emoji_font_error,
         ),
-        SettingsTab::Agent => agent_tab(session_model, is_waiting_for_agent),
+        SettingsTab::Agent => agent_tab(
+            session_model,
+            llm_provider_name,
+            llm_base_url,
+            llm_api_key,
+            llm_api_key_status,
+            llm_default_model,
+            llm_models,
+            is_llm_provider_changing,
+            llm_config_status,
+            is_waiting_for_agent,
+        ),
         SettingsTab::Tools => tools_tab(mcp_server_count, mcp_tool_count),
         SettingsTab::Storage => storage_tab(message_count, db_path),
     };
 
-    container(column![settings_header(active_tab), content].spacing(18))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(20)
-        .into()
+    let body = scrollable(content).width(Length::Fill).height(Length::Fill);
+
+    container(
+        column![settings_header(active_tab), body]
+            .spacing(18)
+            .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .padding(20)
+    .into()
 }
 
 fn settings_header(active_tab: SettingsTab) -> Element<'static, Message> {
@@ -171,7 +215,7 @@ fn general_tab<'a>(
     let mut rows = vec![
         detail_row("Theme", "System default"),
         detail_row("Window", "Desktop app"),
-        detail_row("Configuration", "Environment variables"),
+        detail_row("Provider settings", "preference/llm-provider.json"),
         detail_row(
             "Icons",
             if is_icon_font_loaded {
@@ -202,10 +246,34 @@ fn general_tab<'a>(
     settings_panel(rows)
 }
 
-fn agent_tab<'a>(session_model: &'a str, is_waiting_for_agent: bool) -> Element<'a, Message> {
-    settings_panel(vec![
+fn agent_tab<'a>(
+    session_model: &'a str,
+    llm_provider_name: &'a str,
+    llm_base_url: &'a str,
+    llm_api_key: &'a str,
+    llm_api_key_status: String,
+    llm_default_model: &'a str,
+    llm_models: &'a str,
+    is_llm_provider_changing: bool,
+    llm_config_status: Option<String>,
+    is_waiting_for_agent: bool,
+) -> Element<'a, Message> {
+    if is_llm_provider_changing {
+        return agent_change_tab(
+            session_model,
+            llm_provider_name,
+            llm_base_url,
+            llm_api_key,
+            llm_default_model,
+            llm_models,
+            llm_config_status,
+            is_waiting_for_agent,
+        );
+    }
+
+    let mut rows = vec![
         detail_row("Preset", "Default"),
-        detail_row("Model", session_model),
+        detail_row("Active model", session_model),
         detail_row(
             "Status",
             if is_waiting_for_agent {
@@ -217,7 +285,117 @@ fn agent_tab<'a>(session_model: &'a str, is_waiting_for_agent: bool) -> Element<
         detail_row("Temperature", "0.7"),
         detail_row("Top P", "100"),
         detail_row("Top K", "40"),
-    ])
+        section_label("Provider"),
+        detail_row("Provider", llm_provider_name),
+        detail_row("Service URL", llm_base_url),
+        detail_row("API key", llm_api_key_status),
+        detail_row("Main model", llm_default_model),
+        detail_row("Available models", llm_models),
+        row![
+            button(icon_label(octicons::pencil().size(14), "Change"))
+                .on_press(Message::ChangeLlmProviderConfig)
+                .padding([7, 10])
+                .style(theme::quiet_button),
+            button(icon_label(octicons::sync().size(14), "Reload"))
+                .on_press(Message::ReloadLlmProviderConfig)
+                .padding([7, 10])
+                .style(theme::quiet_button),
+        ]
+        .spacing(8)
+        .into(),
+    ];
+
+    if let Some(status) = llm_config_status {
+        rows.push(detail_row("Config", status));
+    }
+
+    settings_panel(rows)
+}
+
+fn agent_change_tab<'a>(
+    session_model: &'a str,
+    llm_provider_name: &'a str,
+    llm_base_url: &'a str,
+    llm_api_key: &'a str,
+    llm_default_model: &'a str,
+    llm_models: &'a str,
+    llm_config_status: Option<String>,
+    is_waiting_for_agent: bool,
+) -> Element<'a, Message> {
+    let save_button = button(icon_label(octicons::check().size(14), "Save changes"))
+        .padding([7, 10])
+        .style(theme::quiet_button);
+    let save_button = if is_waiting_for_agent {
+        save_button
+    } else {
+        save_button.on_press(Message::SaveLlmProviderConfig)
+    };
+
+    let mut rows = vec![
+        detail_row("Active model", session_model),
+        detail_row(
+            "Status",
+            if is_waiting_for_agent {
+                "Responding"
+            } else {
+                "Ready"
+            },
+        ),
+        section_label("Change provider"),
+        input_row(
+            "Provider",
+            "OpenAI compatible",
+            llm_provider_name,
+            Message::LlmProviderNameChanged,
+        ),
+        input_row(
+            "Service URL",
+            "https://api.openai.com/v1",
+            llm_base_url,
+            Message::LlmBaseUrlChanged,
+        ),
+        input_row(
+            "API key",
+            "Uses OPENAI_API_KEY when empty",
+            llm_api_key,
+            Message::LlmApiKeyChanged,
+        ),
+        input_row(
+            "Main model",
+            "mimo-v2.5",
+            llm_default_model,
+            Message::LlmDefaultModelChanged,
+        ),
+        input_row(
+            "Available models",
+            "model-a, model-b",
+            llm_models,
+            Message::LlmModelsChanged,
+        ),
+        row![
+            save_button,
+            button(icon_label(octicons::x().size(14), "Cancel"))
+                .on_press(Message::CancelLlmProviderConfigChange)
+                .padding([7, 10])
+                .style(theme::quiet_button),
+        ]
+        .spacing(8)
+        .into(),
+    ];
+
+    if let Some(status) = llm_config_status {
+        rows.push(detail_row("Config", status));
+    }
+
+    settings_panel(rows)
+}
+
+fn section_label<'a>(label: &'a str) -> Element<'a, Message> {
+    text(label)
+        .size(14)
+        .color(theme::muted_text_color())
+        .width(Length::Fill)
+        .into()
 }
 
 fn tools_tab<'a>(mcp_server_count: usize, mcp_tool_count: usize) -> Element<'a, Message> {
@@ -270,6 +448,28 @@ fn detail_row<'a>(label: &'a str, value: impl Into<String>) -> Element<'a, Messa
             .color(theme::muted_text_color())
             .width(Length::FillPortion(2)),
         text(value.into()).size(13).width(Length::FillPortion(5)),
+    ]
+    .spacing(12)
+    .align_y(alignment::Vertical::Center)
+    .into()
+}
+
+fn input_row<'a>(
+    label: &'a str,
+    placeholder: &'a str,
+    value: &'a str,
+    on_input: fn(String) -> Message,
+) -> Element<'a, Message> {
+    row![
+        text(label)
+            .size(13)
+            .color(theme::muted_text_color())
+            .width(Length::FillPortion(2)),
+        text_input(placeholder, value)
+            .on_input(on_input)
+            .size(13)
+            .padding([6, 8])
+            .width(Length::FillPortion(5)),
     ]
     .spacing(12)
     .align_y(alignment::Vertical::Center)

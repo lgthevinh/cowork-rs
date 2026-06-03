@@ -1,0 +1,12 @@
+{
+  "provider_name": "OpenAI compatible",
+  "base_url": "https://api.openai.com/v1",
+  "api_key": "",
+  "default_model": "mimo-v2.5",
+  "models": [
+    {
+      "id": "mimo-v2.5",
+      "display_name": "mimo-v2.5"
+    }
+  ]
+}

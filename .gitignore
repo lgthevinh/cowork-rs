@@ -1,6 +1,7 @@
 /target
 data.db
 mcp-servers.json
+preference/llm-provider.json
 .env
 .env.*
 !.env.example

@@ -2,9 +2,7 @@
 
 ## Overview
 
-Cowork RS is a Rust desktop application for working with AI agents in a local-first environment. The project is inspired by Claude-style coworking workflows, but it uses a custom GUI, compile-time agent presets, local SQLite persistence, and an extensible tool system.
-
-The goal is to provide a focused desktop app where a user can chat with a built-in agent, persist sessions locally, and eventually expand the agent with custom tools, knowledge, and structured workflows.
+Cowork RS is a local-first Rust desktop app for chatting with a built-in AI agent. It uses `iced` for the UI, OpenAI-compatible chat completions for the agent, MCP for tools, and SQLite for local persistence.
 
 ## Core Goals
 
@@ -16,17 +14,16 @@ The goal is to provide a focused desktop app where a user can chat with a built-
 
 ## Architecture
 
-The application is split into three main subsystems:
-
 - `src/app/`: iced UI state, components, and theme configuration.
 - `src/agent/`: agent definition, presets, OpenAI orchestration, and tool traits.
-- `src/repo/`: SQLite connection handling, record schemas, repository traits, filters, and concrete repo implementations.
+- `src/record/`: reusable local storage primitives such as `RecordSqlite`, `SqliteRecord`, `RecordSchema`, `RecordFilter`, and `RecordFile`.
+- `src/storage/`: app-specific persisted record types.
 
-`src/main.rs` wires these pieces together by opening the local database, initializing schemas, creating the agent orchestrator, and launching the UI.
+`src/main.rs` opens local storage, initializes schemas, creates the agent orchestrator, and launches the UI.
 
 ## Current Behavior
 
-On startup, the app opens `data.db`, creates the `sessions` and `messages` tables if needed, initializes the default compile-time agent preset, and launches the chat UI.
+On startup, the app opens `data.db` through `RecordSqlite`, creates the chat tables if needed, initializes the default agent preset, and launches the chat UI.
 
 When the user sends a message, the UI:
 
@@ -38,9 +35,7 @@ When the user sends a message, the UI:
 
 ## Data Model
 
-`SessionRecord` stores chat thread metadata such as `session_id`, `title`, `model`, timestamps, and model parameters.
-
-`MessageRecord` stores ordered text messages with `message_id`, `session_id`, `sequence`, numeric `role`, `content`, and `created_at`.
+`SessionRecord` and `MessageRecord` live in `src/storage/chat_record.rs`. They implement `RecordSchema` for table creation and `SqliteRecord` for SQL, row conversion, and upsert bindings. `RecordSqlite` owns the single SQLite connection and provides DAO-style calls such as `read_all::<SessionRecord>()`, `upsert(record)`, and `delete::<MessageRecord>(&filters)`.
 
 Message roles use constants:
 
@@ -51,7 +46,9 @@ Message roles use constants:
 
 ## Configuration
 
-Development configuration can be provided with `.env`:
+LLM provider configuration is stored in `preference/llm-provider.json`, created from defaults on first startup and ignored by Git. Use `preference/llm-provider.example.json` as the template.
+
+`.env` remains supported as fallback for secrets and base URL:
 
 ```env
 OPENAI_API_KEY=
@@ -60,25 +57,10 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 
 Real `.env` files are ignored by Git. Production builds should prefer environment variables or a future settings/keychain flow.
 
-MCP servers are loaded at startup from `mcp-servers.json` when the file exists.
-The file is ignored by Git because MCP entries can contain local paths or
-environment values. Use `mcp-servers.example.json` as the template. The default
-example enables the official filesystem MCP server through:
-
-```json
-{
-  "mcpServers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
-    }
-  }
-}
-```
+MCP servers are loaded from `mcp-servers.json` when present. The file is ignored by Git; use `mcp-servers.example.json` as the template.
 
 ## Roadmap
 
-- Load previous sessions from SQLite into the sidebar.
 - Add JSON schema validation for tool inputs.
 - Add knowledge document records and embedding storage.
 - Support streaming responses and cancellation.
