@@ -1,4 +1,6 @@
-use iced::widget::{button, column, container, opaque, row, scrollable, stack, text, text_input};
+use iced::widget::{
+    button, column, container, opaque, row, scrollable, stack, text, text_editor, text_input,
+};
 use iced::{Element, Length, alignment};
 use iced_fonts::octicons;
 
@@ -22,8 +24,12 @@ pub(in crate::app) fn settings_dialog<'a>(
     emoji_font_path: Option<String>,
     emoji_font_error: Option<String>,
     is_waiting_for_agent: bool,
+    mcp_configured_server_count: usize,
     mcp_server_count: usize,
     mcp_tool_count: usize,
+    mcp_config_editor: &'a text_editor::Content,
+    is_mcp_config_changing: bool,
+    mcp_config_status: Option<String>,
 ) -> Element<'a, Message> {
     let dialog = container(
         row![
@@ -46,8 +52,12 @@ pub(in crate::app) fn settings_dialog<'a>(
                 emoji_font_path,
                 emoji_font_error,
                 is_waiting_for_agent,
+                mcp_configured_server_count,
                 mcp_server_count,
                 mcp_tool_count,
+                mcp_config_editor,
+                is_mcp_config_changing,
+                mcp_config_status,
             ),
         ]
         .height(Length::Fill),
@@ -148,8 +158,12 @@ fn settings_content<'a>(
     emoji_font_path: Option<String>,
     emoji_font_error: Option<String>,
     is_waiting_for_agent: bool,
+    mcp_configured_server_count: usize,
     mcp_server_count: usize,
     mcp_tool_count: usize,
+    mcp_config_editor: &'a text_editor::Content,
+    is_mcp_config_changing: bool,
+    mcp_config_status: Option<String>,
 ) -> Element<'a, Message> {
     let content = match active_tab {
         SettingsTab::General => general_tab(
@@ -170,7 +184,15 @@ fn settings_content<'a>(
             llm_config_status,
             is_waiting_for_agent,
         ),
-        SettingsTab::Tools => tools_tab(mcp_server_count, mcp_tool_count),
+        SettingsTab::Tools => tools_tab(
+            mcp_configured_server_count,
+            mcp_server_count,
+            mcp_tool_count,
+            mcp_config_editor,
+            is_mcp_config_changing,
+            mcp_config_status,
+            is_waiting_for_agent,
+        ),
         SettingsTab::Storage => storage_tab(message_count, db_path),
     };
 
@@ -398,18 +420,107 @@ fn section_label<'a>(label: &'a str) -> Element<'a, Message> {
         .into()
 }
 
-fn tools_tab<'a>(mcp_server_count: usize, mcp_tool_count: usize) -> Element<'a, Message> {
+fn tools_tab<'a>(
+    mcp_configured_server_count: usize,
+    mcp_server_count: usize,
+    mcp_tool_count: usize,
+    mcp_config_editor: &'a text_editor::Content,
+    is_mcp_config_changing: bool,
+    mcp_config_status: Option<String>,
+    is_waiting_for_agent: bool,
+) -> Element<'a, Message> {
+    if is_mcp_config_changing {
+        return tools_change_tab(
+            mcp_configured_server_count,
+            mcp_server_count,
+            mcp_tool_count,
+            mcp_config_editor,
+            mcp_config_status,
+            is_waiting_for_agent,
+        );
+    }
+
     let mcp_status = if mcp_server_count > 0 {
         format!("{mcp_server_count} server(s), {mcp_tool_count} tool(s)")
     } else {
         "No servers connected".to_owned()
     };
 
-    settings_panel(vec![
+    let mut rows = vec![
         detail_row("Runtime", "Active"),
+        detail_row("Config file", "preference/mcp-servers.json"),
+        detail_row(
+            "Configured servers",
+            mcp_configured_server_count.to_string(),
+        ),
         detail_row("MCP", mcp_status),
         detail_row("Tool schemas", "JSON Schema"),
-    ])
+        row![
+            button(icon_label(octicons::pencil().size(14), "Change"))
+                .on_press(Message::ChangeMcpServersConfig)
+                .padding([7, 10])
+                .style(theme::quiet_button),
+            button(icon_label(octicons::sync().size(14), "Reload"))
+                .on_press(Message::ReloadMcpServersConfig)
+                .padding([7, 10])
+                .style(theme::quiet_button),
+        ]
+        .spacing(8)
+        .into(),
+    ];
+
+    if let Some(status) = mcp_config_status {
+        rows.push(detail_row("Config", status));
+    }
+
+    settings_panel(rows)
+}
+
+fn tools_change_tab<'a>(
+    mcp_configured_server_count: usize,
+    mcp_server_count: usize,
+    mcp_tool_count: usize,
+    mcp_config_editor: &'a text_editor::Content,
+    mcp_config_status: Option<String>,
+    is_waiting_for_agent: bool,
+) -> Element<'a, Message> {
+    let save_button = button(icon_label(octicons::check().size(14), "Save changes"))
+        .padding([7, 10])
+        .style(theme::quiet_button);
+    let save_button = if is_waiting_for_agent {
+        save_button
+    } else {
+        save_button.on_press(Message::SaveMcpServersConfig)
+    };
+
+    let mut rows = vec![
+        detail_row("Config file", "preference/mcp-servers.json"),
+        detail_row(
+            "Configured servers",
+            mcp_configured_server_count.to_string(),
+        ),
+        detail_row(
+            "Connected",
+            format!("{mcp_server_count} server(s), {mcp_tool_count} tool(s)"),
+        ),
+        section_label("Change MCP servers"),
+        editor_row("Config JSON", mcp_config_editor),
+        row![
+            save_button,
+            button(icon_label(octicons::x().size(14), "Cancel"))
+                .on_press(Message::CancelMcpServersConfigChange)
+                .padding([7, 10])
+                .style(theme::quiet_button),
+        ]
+        .spacing(8)
+        .into(),
+    ];
+
+    if let Some(status) = mcp_config_status {
+        rows.push(detail_row("Config", status));
+    }
+
+    settings_panel(rows)
 }
 
 fn storage_tab<'a>(message_count: usize, db_path: String) -> Element<'a, Message> {
@@ -473,6 +584,26 @@ fn input_row<'a>(
     ]
     .spacing(12)
     .align_y(alignment::Vertical::Center)
+    .into()
+}
+
+fn editor_row<'a>(label: &'a str, content: &'a text_editor::Content) -> Element<'a, Message> {
+    row![
+        text(label)
+            .size(13)
+            .color(theme::muted_text_color())
+            .width(Length::FillPortion(2)),
+        container(
+            text_editor(content)
+                .placeholder(r#"{"mcpServers":{}}"#)
+                .on_action(Message::McpServersConfigEdited)
+                .height(180)
+                .padding([6, 8])
+        )
+        .width(Length::FillPortion(5))
+    ]
+    .spacing(12)
+    .align_y(alignment::Vertical::Top)
     .into()
 }
 

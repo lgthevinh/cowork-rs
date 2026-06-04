@@ -7,12 +7,14 @@ use async_openai::{
         ChatCompletionRequestUserMessageArgs,
     },
 };
-use serde::Deserialize;
-use std::{collections::BTreeMap, fs, path::Path};
+use std::sync::{Arc, RwLock};
 
 use crate::log::ilog::ILog;
 use crate::record::record_file::RecordFile;
 use crate::storage::llm_provider_config::{LLM_PROVIDER_CONFIG_PATH, LlmProviderConfig};
+use crate::storage::mcp_servers_config::{
+    MCP_SERVERS_CONFIG_PATH, McpServersConfig, load_or_init_mcp_servers_config,
+};
 
 use super::agent::{Agent, AgentResponse, AgentStreamCallback};
 use super::agent_preset::DEFAULT_AGENT_PRESET;
@@ -20,15 +22,31 @@ use super::agent_tool::AgentTool;
 use super::tool::builtin::time_tool::GetCurrentTimeTool;
 use super::tool::mcp::mcp_client::McpClientManager;
 
-const MCP_SERVERS_CONFIG_PATH: &str = "mcp-servers.json";
 const TAG: &str = "AgentOrchestrator";
 
 pub struct AgentOrchestrator {
     agents: Vec<Agent>,
+    mcp_state: RwLock<McpRuntimeState>,
+}
+
+struct McpRuntimeState {
+    configured_server_count: usize,
     mcp_server_count: usize,
     mcp_tool_count: usize,
     _mcp_manager: Option<McpClientManager>,
     _mcp_runtime: Option<tokio::runtime::Runtime>,
+}
+
+impl Default for McpRuntimeState {
+    fn default() -> Self {
+        Self {
+            configured_server_count: 0,
+            mcp_server_count: 0,
+            mcp_tool_count: 0,
+            _mcp_manager: None,
+            _mcp_runtime: None,
+        }
+    }
 }
 
 impl AgentOrchestrator {
@@ -37,10 +55,7 @@ impl AgentOrchestrator {
 
         Self {
             agents,
-            mcp_server_count: 0,
-            mcp_tool_count: 0,
-            _mcp_manager: None,
-            _mcp_runtime: None,
+            mcp_state: RwLock::new(McpRuntimeState::default()),
         }
     }
 
@@ -53,11 +68,24 @@ impl AgentOrchestrator {
     }
 
     pub fn mcp_server_count(&self) -> usize {
-        self.mcp_server_count
+        self.mcp_state
+            .read()
+            .map(|state| state.mcp_server_count)
+            .unwrap_or(0)
     }
 
     pub fn mcp_tool_count(&self) -> usize {
-        self.mcp_tool_count
+        self.mcp_state
+            .read()
+            .map(|state| state.mcp_tool_count)
+            .unwrap_or(0)
+    }
+
+    pub fn mcp_configured_server_count(&self) -> usize {
+        self.mcp_state
+            .read()
+            .map(|state| state.configured_server_count)
+            .unwrap_or(0)
     }
 
     pub fn load_provider_config(&self) -> anyhow::Result<LlmProviderConfig> {
@@ -79,6 +107,37 @@ impl AgentOrchestrator {
         );
 
         Ok(provider_config)
+    }
+
+    pub fn reload_mcp_servers_config(&self) -> anyhow::Result<McpServersConfig> {
+        ILog::d(TAG, "reload_mcp_servers_config: start");
+
+        let config = load_or_init_mcp_servers_config()?;
+        let configured_server_count = config.configured_server_count();
+        let (mcp_state, mcp_tools) = init_mcp_tools_from_config(config.clone())?;
+        let mut tools = builtin_agent_tools();
+        tools.extend(mcp_tools);
+
+        for agent in &self.agents {
+            agent.set_tools(tools.clone())?;
+        }
+
+        *self
+            .mcp_state
+            .write()
+            .map_err(|_| anyhow::anyhow!("mcp runtime state lock is poisoned"))? = mcp_state;
+
+        ILog::d(
+            TAG,
+            &format!(
+                "reload_mcp_servers_config: completed configured_servers={} connected_servers={} tools={}",
+                configured_server_count,
+                self.mcp_server_count(),
+                self.mcp_tool_count()
+            ),
+        );
+
+        Ok(config)
     }
 
     pub async fn chat_completion_stream_response(
@@ -111,7 +170,7 @@ impl AgentOrchestrator {
             ),
             Err(error) => ILog::d(
                 TAG,
-                &format!("chat_completion_stream_response: failed error={error}"),
+                &format!("chat_completion_stream_response: failed error={error:#}"),
             ),
         }
 
@@ -161,22 +220,20 @@ pub fn init() -> anyhow::Result<AgentOrchestrator> {
     ILog::d(TAG, "init: OpenAI client created");
 
     // Start with builtin tools
-    let mut tools: Vec<Box<dyn AgentTool + Send + Sync>> = vec![Box::new(GetCurrentTimeTool)];
+    let mut tools = builtin_agent_tools();
     ILog::d(TAG, &format!("init: builtin_tools={}", tools.len()));
 
     // Connect to MCP servers if configured.
-    let mut mcp_manager = None;
-    let mut mcp_runtime = None;
-    let (mcp_server_count, mcp_tool_count) = match init_mcp_tools() {
-        Ok((manager, runtime, server_count, tool_count)) => {
-            tools.extend(manager.agent_tools());
+    let mcp_state = match init_mcp_tools() {
+        Ok((state, mcp_tools)) => {
+            let server_count = state.mcp_server_count;
+            let tool_count = state.mcp_tool_count;
+            tools.extend(mcp_tools);
             ILog::d(
                 TAG,
                 &format!("init: mcp initialized servers={server_count} tools={tool_count}"),
             );
-            mcp_manager = Some(manager);
-            mcp_runtime = Some(runtime);
-            (server_count, tool_count)
+            state
         }
         Err(e) => {
             ILog::d(TAG, &format!("init: mcp initialization failed error={e}"));
@@ -184,7 +241,7 @@ pub fn init() -> anyhow::Result<AgentOrchestrator> {
                 TAG,
                 &format!("init: failed to initialize MCP tools error={e}"),
             );
-            (0, 0)
+            McpRuntimeState::default()
         }
     };
     ILog::d(TAG, &format!("init: total_tools={}", tools.len()));
@@ -198,11 +255,11 @@ pub fn init() -> anyhow::Result<AgentOrchestrator> {
         tools,
     );
 
-    let mut orchestrator = AgentOrchestrator::new(vec![default_agent]);
-    orchestrator.mcp_server_count = mcp_server_count;
-    orchestrator.mcp_tool_count = mcp_tool_count;
-    orchestrator._mcp_manager = mcp_manager;
-    orchestrator._mcp_runtime = mcp_runtime;
+    let orchestrator = AgentOrchestrator::new(vec![default_agent]);
+    *orchestrator
+        .mcp_state
+        .write()
+        .map_err(|_| anyhow::anyhow!("mcp runtime state lock is poisoned"))? = mcp_state;
     orchestrator.load_provider_config()?;
 
     ILog::d(
@@ -210,8 +267,8 @@ pub fn init() -> anyhow::Result<AgentOrchestrator> {
         &format!(
             "init: completed agents={} mcp_servers={} mcp_tools={}",
             orchestrator.agents.len(),
-            orchestrator.mcp_server_count,
-            orchestrator.mcp_tool_count
+            orchestrator.mcp_server_count(),
+            orchestrator.mcp_tool_count()
         ),
     );
 
@@ -239,11 +296,24 @@ fn openai_client_from_runtime_config(config: &AgentRuntimeConfig) -> Client<Open
     Client::with_config(openai_config)
 }
 
+fn builtin_agent_tools() -> Vec<Arc<dyn AgentTool + Send + Sync>> {
+    vec![Arc::new(GetCurrentTimeTool)]
+}
+
 /// Initialize MCP tools from local MCP server configuration.
 ///
-/// Loads `mcp-servers.json` when present.
-fn init_mcp_tools() -> anyhow::Result<(McpClientManager, tokio::runtime::Runtime, usize, usize)> {
+/// Loads `preference/mcp-servers.json`, importing legacy `mcp-servers.json`
+/// only when the preference file does not exist yet.
+fn init_mcp_tools() -> anyhow::Result<(McpRuntimeState, Vec<Arc<dyn AgentTool + Send + Sync>>)> {
+    let config = load_or_init_mcp_servers_config()?;
+    init_mcp_tools_from_config(config)
+}
+
+fn init_mcp_tools_from_config(
+    config: McpServersConfig,
+) -> anyhow::Result<(McpRuntimeState, Vec<Arc<dyn AgentTool + Send + Sync>>)> {
     ILog::d(TAG, "init_mcp_tools: start");
+    let configured_server_count = config.configured_server_count();
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("cowork-mcp")
@@ -254,7 +324,7 @@ fn init_mcp_tools() -> anyhow::Result<(McpClientManager, tokio::runtime::Runtime
     let (manager, server_count, tool_count) = rt.block_on(async {
         let mut manager = McpClientManager::new();
 
-        connect_mcp_servers_from_file(&mut manager, MCP_SERVERS_CONFIG_PATH).await;
+        connect_mcp_servers_from_config(&mut manager, config).await;
 
         let server_count = manager.server_count();
         let tool_count = manager.tool_count();
@@ -274,57 +344,44 @@ fn init_mcp_tools() -> anyhow::Result<(McpClientManager, tokio::runtime::Runtime
 
         (manager, server_count, tool_count)
     });
+    let tools = manager.agent_tools();
 
     ILog::d(
         TAG,
         &format!("init_mcp_tools: completed servers={server_count} tools={tool_count}"),
     );
 
-    Ok((manager, rt, server_count, tool_count))
+    Ok((
+        McpRuntimeState {
+            configured_server_count,
+            mcp_server_count: server_count,
+            mcp_tool_count: tool_count,
+            _mcp_manager: Some(manager),
+            _mcp_runtime: Some(rt),
+        },
+        tools,
+    ))
 }
 
-async fn connect_mcp_servers_from_file(manager: &mut McpClientManager, path: &str) {
+async fn connect_mcp_servers_from_config(manager: &mut McpClientManager, config: McpServersConfig) {
     ILog::d(
         TAG,
-        &format!("connect_mcp_servers_from_file: loading path={path}"),
+        &format!("connect_mcp_servers_from_config: path={MCP_SERVERS_CONFIG_PATH}"),
     );
 
-    let config = match McpServersConfig::read(path) {
-        Ok(Some(config)) => {
-            ILog::d(
-                TAG,
-                &format!(
-                    "connect_mcp_servers_from_file: loaded server_count={}",
-                    config.mcp_servers.len()
-                ),
-            );
-            config
-        }
-        Ok(None) => {
-            ILog::d(
-                TAG,
-                &format!("connect_mcp_servers_from_file: config not found path={path}"),
-            );
-            return;
-        }
-        Err(error) => {
-            ILog::d(
-                TAG,
-                &format!("connect_mcp_servers_from_file: load failed path={path} error={error}"),
-            );
-            ILog::w(
-                TAG,
-                &format!("connect_mcp_servers_from_file: failed to load path={path} error={error}"),
-            );
-            return;
-        }
-    };
+    ILog::d(
+        TAG,
+        &format!(
+            "connect_mcp_servers_from_config: loaded server_count={}",
+            config.mcp_servers.len()
+        ),
+    );
 
     for (name, server) in config.mcp_servers {
         if server.disabled {
             ILog::d(
                 TAG,
-                &format!("connect_mcp_servers_from_file: skipping disabled server={name}"),
+                &format!("connect_mcp_servers_from_config: skipping disabled server={name}"),
             );
             continue;
         }
@@ -335,7 +392,7 @@ async fn connect_mcp_servers_from_file(manager: &mut McpClientManager, path: &st
             ILog::d(
                 TAG,
                 &format!(
-                    "connect_mcp_servers_from_file: connecting stdio server={name} command={command} args={} env_keys={}",
+                    "connect_mcp_servers_from_config: connecting stdio server={name} command={command} args={} env_keys={}",
                     args.len(),
                     env.len()
                 ),
@@ -348,19 +405,19 @@ async fn connect_mcp_servers_from_file(manager: &mut McpClientManager, path: &st
                 ILog::d(
                     TAG,
                     &format!(
-                        "connect_mcp_servers_from_file: stdio connect failed server={name} error={error}"
+                        "connect_mcp_servers_from_config: stdio connect failed server={name} error={error}"
                     ),
                 );
                 ILog::w(
                     TAG,
                     &format!(
-                        "connect_mcp_servers_from_file: failed to connect stdio server={name} path={path} error={error}"
+                        "connect_mcp_servers_from_config: failed to connect stdio server={name} path={MCP_SERVERS_CONFIG_PATH} error={error}"
                     ),
                 );
             } else {
                 ILog::d(
                     TAG,
-                    &format!("connect_mcp_servers_from_file: stdio connected server={name}"),
+                    &format!("connect_mcp_servers_from_config: stdio connected server={name}"),
                 );
             }
 
@@ -370,25 +427,27 @@ async fn connect_mcp_servers_from_file(manager: &mut McpClientManager, path: &st
         if let Some(url) = server.url {
             ILog::d(
                 TAG,
-                &format!("connect_mcp_servers_from_file: connecting http server={name} url={url}"),
+                &format!(
+                    "connect_mcp_servers_from_config: connecting http server={name} url={url}"
+                ),
             );
             if let Err(error) = manager.connect_http(&name, &url).await {
                 ILog::d(
                     TAG,
                     &format!(
-                        "connect_mcp_servers_from_file: http connect failed server={name} error={error}"
+                        "connect_mcp_servers_from_config: http connect failed server={name} error={error}"
                     ),
                 );
                 ILog::w(
                     TAG,
                     &format!(
-                        "connect_mcp_servers_from_file: failed to connect http server={name} path={path} error={error}"
+                        "connect_mcp_servers_from_config: failed to connect http server={name} path={MCP_SERVERS_CONFIG_PATH} error={error}"
                     ),
                 );
             } else {
                 ILog::d(
                     TAG,
-                    &format!("connect_mcp_servers_from_file: http connected server={name}"),
+                    &format!("connect_mcp_servers_from_config: http connected server={name}"),
                 );
             }
 
@@ -397,71 +456,15 @@ async fn connect_mcp_servers_from_file(manager: &mut McpClientManager, path: &st
 
         ILog::d(
             TAG,
-            &format!("connect_mcp_servers_from_file: skipping invalid server={name}"),
+            &format!("connect_mcp_servers_from_config: skipping invalid server={name}"),
         );
         ILog::w(
             TAG,
             &format!(
-                "connect_mcp_servers_from_file: skipping invalid server={name} path={path} expected command or url"
+                "connect_mcp_servers_from_config: skipping invalid server={name} path={MCP_SERVERS_CONFIG_PATH} expected command or url"
             ),
         );
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct McpServersConfig {
-    #[serde(default, alias = "servers")]
-    mcp_servers: BTreeMap<String, McpServerConfig>,
-}
-
-impl McpServersConfig {
-    fn read(path: impl AsRef<Path>) -> anyhow::Result<Option<Self>> {
-        let path = path.as_ref();
-        ILog::d(
-            TAG,
-            &format!("McpServersConfig::read: path={}", path.display()),
-        );
-
-        if !path.exists() {
-            ILog::d(
-                TAG,
-                &format!("McpServersConfig::read: missing path={}", path.display()),
-            );
-            return Ok(None);
-        }
-
-        let contents = fs::read_to_string(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        ILog::d(
-            TAG,
-            &format!(
-                "McpServersConfig::read: read bytes={} path={}",
-                contents.len(),
-                path.display()
-            ),
-        );
-
-        let config = serde_json::from_str(&contents)
-            .with_context(|| format!("failed to parse {}", path.display()))?;
-        ILog::d(
-            TAG,
-            &format!("McpServersConfig::read: parsed path={}", path.display()),
-        );
-
-        Ok(Some(config))
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct McpServerConfig {
-    command: Option<String>,
-    args: Option<Vec<String>>,
-    url: Option<String>,
-    env: Option<BTreeMap<String, String>>,
-    #[serde(default)]
-    disabled: bool,
 }
 
 pub fn user_message_request(content: &str) -> anyhow::Result<ChatCompletionRequestMessage> {

@@ -2,7 +2,7 @@ use anyhow::Context;
 use rmcp::{
     RoleClient, ServiceExt, model::Tool, service::RunningService, transport::TokioChildProcess,
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use crate::agent::agent_tool::AgentTool;
 use crate::log::ilog::ILog;
@@ -97,8 +97,8 @@ impl McpClientManager {
     }
 
     /// Get all discovered tools as `AgentTool` implementations.
-    pub fn agent_tools(&self) -> Vec<Box<dyn AgentTool + Send + Sync>> {
-        let mut tools: Vec<Box<dyn AgentTool + Send + Sync>> = Vec::new();
+    pub fn agent_tools(&self) -> Vec<Arc<dyn AgentTool + Send + Sync>> {
+        let mut tools: Vec<Arc<dyn AgentTool + Send + Sync>> = Vec::new();
 
         for server in &self.servers {
             for tool in &server.tools {
@@ -111,7 +111,7 @@ impl McpClientManager {
                 let parameters_json =
                     serde_json::to_string(&*tool.input_schema).unwrap_or_else(|_| "{}".to_owned());
 
-                tools.push(Box::new(McpToolAdapter::new(
+                tools.push(Arc::new(McpToolAdapter::new(
                     name,
                     description,
                     parameters_json,

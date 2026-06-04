@@ -57,11 +57,11 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 
 Real `.env` files are ignored by Git. Production builds should prefer environment variables or a future settings/keychain flow.
 
-MCP servers are loaded from `mcp-servers.json` when present. The file is ignored by Git; use `mcp-servers.example.json` as the template.
+MCP servers are stored in `preference/mcp-servers.json`, created on first startup, and ignored by Git. Use `preference/mcp-servers.example.json` as the template. If an older root `mcp-servers.json` exists and the preference file does not, the app imports it once without deleting the old file.
 
 ## Roadmap
 
 - Add JSON schema validation for tool inputs.
 - Add knowledge document records and embedding storage.
 - Support streaming responses and cancellation.
-- Move user-facing configuration into an app settings screen.
+- Add richer user-facing forms for nested MCP server configuration.

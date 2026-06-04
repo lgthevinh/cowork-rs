@@ -15,7 +15,7 @@ Cowork RS is a Rust 2024 desktop chat app using `iced`, an OpenAI-compatible age
 
 1. `main.rs` opens `data.db` through `record::RecordSqlite`.
 2. `RecordSqlite::init::<SessionRecord>()` and `init::<MessageRecord>()` ensure tables exist.
-3. `agent_orchestrator::init()` loads provider config, creates the OpenAI-compatible client, registers builtin tools, and discovers MCP tools from `mcp-servers.json` if present.
+3. `agent_orchestrator::init()` loads provider config, creates the OpenAI-compatible client, registers builtin tools, and discovers MCP tools from `preference/mcp-servers.json` if present.
 4. `app::run(db, agent_orchestrator)` launches the iced UI.
 
 ## Storage Boundary
@@ -74,6 +74,8 @@ When a user sends a message:
 
 LLM provider config lives at `preference/llm-provider.json` and is managed through `RecordFile`. The Agent settings tab can edit it; saving calls `AgentOrchestrator::load_provider_config()` to swap the client/model into the existing agent.
 
+MCP server config lives at `preference/mcp-servers.json` and is managed through `RecordFile`. The Tools settings tab can edit the JSON directly; saving calls `AgentOrchestrator::reload_mcp_servers_config()` to reconnect MCP servers and replace the running agent tools. If an older root `mcp-servers.json` exists and the preference file does not, startup imports the legacy file once without deleting it.
+
 `.env` can still provide fallback values:
 
 ```env
@@ -81,7 +83,7 @@ OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 ```
 
-`COWORK_EMOJI_FONT` can override emoji font probing. `mcp-servers.json` is loaded when present and is ignored by Git. Use `mcp-servers.example.json` as the template.
+`COWORK_EMOJI_FONT` can override emoji font probing. `preference/mcp-servers.json` is loaded when present and is ignored by Git. Use `preference/mcp-servers.example.json` as the template.
 
 ## Design Notes
 

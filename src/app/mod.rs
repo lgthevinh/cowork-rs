@@ -9,7 +9,7 @@ use std::sync::{
 
 use async_openai::types::{ChatCompletionRequestMessage, CompletionUsage};
 use iced::futures::{SinkExt, channel::mpsc};
-use iced::widget::{button, column, container, markdown, operation, row, stack, text};
+use iced::widget::{button, column, container, markdown, operation, row, stack, text, text_editor};
 use iced::{Element, Length, Task, alignment, application, font, stream};
 use iced_fonts::{OCTICONS_FONT_BYTES, octicons};
 use std::path::PathBuf;
@@ -27,9 +27,13 @@ use crate::storage::chat_record::{
 use crate::storage::llm_provider_config::{
     LLM_PROVIDER_CONFIG_PATH, LlmModelConfig, LlmProviderConfig,
 };
+use crate::storage::mcp_servers_config::{
+    MCP_SERVERS_CONFIG_PATH, McpServersConfig, load_or_init_mcp_servers_config,
+};
 
 const INITIAL_RECENT_SESSION_COUNT: usize = 5;
 const RECENT_SESSION_PAGE_SIZE: usize = 5;
+const EMPTY_AGENT_RESPONSE: &str = "The agent returned an empty response.";
 const EMOJI_FONT_ENV: &str = "COWORK_EMOJI_FONT";
 const EMOJI_FONT_CANDIDATES: &[&str] = &[
     "assets/fonts/emoji.ttf",
@@ -51,6 +55,7 @@ pub fn run(db: RecordSqlite, agent_orchestrator: AgentOrchestrator) -> iced::Res
     let db = Rc::new(db);
     let mcp_server_count = agent_orchestrator.mcp_server_count();
     let mcp_tool_count = agent_orchestrator.mcp_tool_count();
+    let mcp_configured_server_count = agent_orchestrator.mcp_configured_server_count();
     let agent_orchestrator = Arc::new(agent_orchestrator);
 
     application(
@@ -58,6 +63,7 @@ pub fn run(db: RecordSqlite, agent_orchestrator: AgentOrchestrator) -> iced::Res
             CoworkApp::new(
                 Rc::clone(&db),
                 Arc::clone(&agent_orchestrator),
+                mcp_configured_server_count,
                 mcp_server_count,
                 mcp_tool_count,
             )
@@ -91,6 +97,11 @@ pub(super) enum Message {
     CancelLlmProviderConfigChange,
     SaveLlmProviderConfig,
     ReloadLlmProviderConfig,
+    McpServersConfigEdited(text_editor::Action),
+    ChangeMcpServersConfig,
+    CancelMcpServersConfigChange,
+    SaveMcpServersConfig,
+    ReloadMcpServersConfig,
     IconFontLoaded(Result<(), font::Error>),
     EmojiFontBytesLoaded(Result<(String, Vec<u8>), String>),
     EmojiFontLoaded(String, Result<(), font::Error>),
@@ -210,7 +221,7 @@ impl ChatMessage {
     }
 
     fn tool_call_started(tool_name: impl Into<String>, arguments: impl Into<String>) -> Self {
-        let tool_name = tool_name.into();
+        let tool_name = display_tool_name(tool_name.into());
         let arguments = arguments.into();
         let mut message = Self::tool(&tool_name, format!(":tools: `{tool_name}` is running"));
         message.tool_detail = Some(ToolCallDetail {
@@ -252,13 +263,15 @@ impl ChatMessage {
     }
 
     fn complete_tool_call(&mut self, tool_name: &str, result: String) {
+        let tool_name = display_tool_name(tool_name);
         let result_len = result.len();
 
         if let Some(detail) = &mut self.tool_detail {
+            detail.tool_name.clone_from(&tool_name);
             detail.result = Some(result);
         } else {
             self.tool_detail = Some(ToolCallDetail {
-                tool_name: tool_name.to_owned(),
+                tool_name: tool_name.clone(),
                 arguments: String::new(),
                 result: Some(result),
             });
@@ -267,6 +280,16 @@ impl ChatMessage {
         self.set_body(format!(
             ":check: `{tool_name}` completed ({result_len} chars)"
         ));
+    }
+}
+
+fn display_tool_name(tool_name: impl AsRef<str>) -> String {
+    let tool_name = tool_name.as_ref().trim();
+
+    if tool_name.is_empty() {
+        String::from("Unknown tool")
+    } else {
+        tool_name.to_owned()
     }
 }
 
@@ -295,9 +318,13 @@ struct CoworkApp {
     llm_models: String,
     is_llm_provider_changing: bool,
     llm_config_status: Option<String>,
+    mcp_config_editor: text_editor::Content,
+    is_mcp_config_changing: bool,
+    mcp_config_status: Option<String>,
     messages: Vec<ChatMessage>,
     streaming_assistant_index: Option<usize>,
     is_waiting_for_agent: bool,
+    mcp_configured_server_count: usize,
     mcp_server_count: usize,
     mcp_tool_count: usize,
 }
@@ -306,6 +333,7 @@ impl CoworkApp {
     fn new(
         db: Rc<RecordSqlite>,
         agent_orchestrator: Arc<AgentOrchestrator>,
+        mcp_configured_server_count: usize,
         mcp_server_count: usize,
         mcp_tool_count: usize,
     ) -> (Self, Task<Message>) {
@@ -322,6 +350,16 @@ impl CoworkApp {
             Err(error) => (
                 LlmProviderForm::from_config(&LlmProviderConfig::default_config()),
                 Some(format!("Failed to load provider config: {error}")),
+            ),
+        };
+        let (mcp_config_editor, mcp_config_status) = match load_mcp_servers_config_json() {
+            Ok(config_json) => (text_editor::Content::with_text(&config_json), None),
+            Err(error) => (
+                text_editor::Content::with_text(
+                    &mcp_config_json(&McpServersConfig::default_config())
+                        .unwrap_or_else(|_| String::from("{}")),
+                ),
+                Some(format!("Failed to load MCP config: {error}")),
             ),
         };
 
@@ -350,9 +388,13 @@ impl CoworkApp {
             llm_models: llm_provider_form.models,
             is_llm_provider_changing: false,
             llm_config_status,
+            mcp_config_editor,
+            is_mcp_config_changing: false,
+            mcp_config_status,
             messages: Vec::new(),
             streaming_assistant_index: None,
             is_waiting_for_agent: false,
+            mcp_configured_server_count,
             mcp_server_count,
             mcp_tool_count,
         };
@@ -469,6 +511,28 @@ impl CoworkApp {
                 self.reload_llm_provider_config();
                 Task::none()
             }
+            Message::McpServersConfigEdited(action) => {
+                self.mcp_config_editor.perform(action);
+                self.mcp_config_status = None;
+                Task::none()
+            }
+            Message::ChangeMcpServersConfig => {
+                self.is_mcp_config_changing = true;
+                self.mcp_config_status = None;
+                Task::none()
+            }
+            Message::CancelMcpServersConfigChange => {
+                self.cancel_mcp_servers_config_change();
+                Task::none()
+            }
+            Message::SaveMcpServersConfig => {
+                self.save_mcp_servers_config();
+                Task::none()
+            }
+            Message::ReloadMcpServersConfig => {
+                self.reload_mcp_servers_config();
+                Task::none()
+            }
             Message::IconFontLoaded(result) => {
                 self.is_icon_font_loaded = result.is_ok();
 
@@ -577,8 +641,19 @@ impl CoworkApp {
             Message::ChatStreamCompleted(full_text) => {
                 self.is_waiting_for_agent = false;
 
+                if full_text.trim().is_empty() && self.is_streaming_after_tool_message() {
+                    self.remove_streaming_assistant_message();
+                    if let Err(error) = self.persist_session(now_millis()) {
+                        self.messages.push(ChatMessage::system(format!(
+                            "Failed to update chat session: {error}"
+                        )));
+                    }
+                    self.refresh_recent_sessions();
+                    return scroll_to_bottom();
+                }
+
                 let body = if full_text.trim().is_empty() {
-                    String::from("The agent returned an empty response.")
+                    String::from(EMPTY_AGENT_RESPONSE)
                 } else {
                     full_text
                 };
@@ -763,6 +838,73 @@ impl CoworkApp {
         }
     }
 
+    fn save_mcp_servers_config(&mut self) {
+        let result = (|| -> anyhow::Result<McpServersConfig> {
+            let config: McpServersConfig = serde_json::from_str(&self.mcp_config_editor.text())?;
+            let record_file = RecordFile::open(MCP_SERVERS_CONFIG_PATH)?;
+            record_file.write(&config)?;
+            let config = self.agent_orchestrator.reload_mcp_servers_config()?;
+            Ok(config)
+        })();
+
+        match result {
+            Ok(config) => {
+                self.apply_mcp_servers_config(config);
+                self.is_mcp_config_changing = false;
+                self.mcp_config_status = Some(String::from("Saved"));
+            }
+            Err(error) => {
+                self.mcp_config_status = Some(format!("Save failed: {error}"));
+            }
+        }
+    }
+
+    fn cancel_mcp_servers_config_change(&mut self) {
+        match load_mcp_servers_config_json() {
+            Ok(config_json) => {
+                self.mcp_config_editor = text_editor::Content::with_text(&config_json);
+                self.is_mcp_config_changing = false;
+                self.mcp_config_status = None;
+            }
+            Err(error) => {
+                self.mcp_config_status = Some(format!("Cancel failed: {error}"));
+            }
+        }
+    }
+
+    fn reload_mcp_servers_config(&mut self) {
+        let result = (|| -> anyhow::Result<McpServersConfig> {
+            let config = self.agent_orchestrator.reload_mcp_servers_config()?;
+            Ok(config)
+        })();
+
+        match result {
+            Ok(config) => {
+                self.apply_mcp_servers_config(config);
+                self.is_mcp_config_changing = false;
+                self.mcp_config_status = Some(String::from("Reloaded"));
+            }
+            Err(error) => {
+                self.mcp_config_status = Some(format!("Reload failed: {error}"));
+            }
+        }
+    }
+
+    fn apply_mcp_servers_config(&mut self, config: McpServersConfig) {
+        match mcp_config_json(&config) {
+            Ok(config_json) => {
+                self.mcp_config_editor = text_editor::Content::with_text(&config_json);
+            }
+            Err(error) => {
+                self.mcp_config_status = Some(format!("Failed to show MCP config: {error}"));
+            }
+        }
+
+        self.mcp_configured_server_count = self.agent_orchestrator.mcp_configured_server_count();
+        self.mcp_server_count = self.agent_orchestrator.mcp_server_count();
+        self.mcp_tool_count = self.agent_orchestrator.mcp_tool_count();
+    }
+
     fn apply_llm_provider_form(&mut self, form: LlmProviderForm) {
         self.llm_provider_name = form.provider_name;
         self.llm_base_url = form.base_url;
@@ -920,6 +1062,26 @@ impl CoworkApp {
         }
     }
 
+    fn is_streaming_after_tool_message(&self) -> bool {
+        let Some(index) = self.streaming_assistant_index else {
+            return false;
+        };
+
+        if !matches!(
+            self.messages.get(index),
+            Some(message)
+                if message.kind == ChatMessageKind::Assistant && message.body().trim().is_empty()
+        ) {
+            return false;
+        }
+
+        index > 0
+            && matches!(
+                self.messages.get(index - 1),
+                Some(message) if message.kind == ChatMessageKind::Tool
+            )
+    }
+
     fn chat_request_messages(&self) -> anyhow::Result<Vec<ChatCompletionRequestMessage>> {
         let mut messages = Vec::new();
 
@@ -933,6 +1095,10 @@ impl CoworkApp {
                     messages.push(agent_orchestrator::user_message_request(message.body())?);
                 }
                 ChatMessageKind::Assistant => {
+                    if message.body().trim() == EMPTY_AGENT_RESPONSE {
+                        continue;
+                    }
+
                     messages.push(agent_orchestrator::assistant_message_request(
                         message.body(),
                     )?);
@@ -988,8 +1154,12 @@ impl CoworkApp {
                     self.emoji_font_path.clone(),
                     self.emoji_font_error.clone(),
                     self.is_waiting_for_agent,
+                    self.mcp_configured_server_count,
                     self.mcp_server_count,
                     self.mcp_tool_count,
+                    &self.mcp_config_editor,
+                    self.is_mcp_config_changing,
+                    self.mcp_config_status.clone(),
                 ),
             ]
             .width(Length::Fill)
@@ -1159,7 +1329,7 @@ impl AgentStreamCallback for UiAgentStreamCallback {
 
     async fn on_error(&self, error: &anyhow::Error) {
         if !self.error_sent.swap(true, Ordering::Relaxed) {
-            self.send(Message::ChatStreamFailed(error.to_string()))
+            self.send(Message::ChatStreamFailed(format!("{error:#}")))
                 .await;
         }
     }
@@ -1246,6 +1416,15 @@ fn load_llm_provider_form() -> anyhow::Result<LlmProviderForm> {
     let config: LlmProviderConfig = record_file.read()?;
 
     Ok(LlmProviderForm::from_config(&config))
+}
+
+fn load_mcp_servers_config_json() -> anyhow::Result<String> {
+    let config = load_or_init_mcp_servers_config()?;
+    mcp_config_json(&config)
+}
+
+fn mcp_config_json(config: &McpServersConfig) -> anyhow::Result<String> {
+    Ok(serde_json::to_string_pretty(config)?)
 }
 
 fn parse_model_list(models: &str, default_model: &str) -> Vec<LlmModelConfig> {

@@ -13,7 +13,7 @@ use async_openai::{
 };
 use futures_util::StreamExt;
 use std::collections::BTreeMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 const MAX_TOOL_ITERATIONS: usize = 10;
 
@@ -40,7 +40,7 @@ pub struct Agent {
     name: String,
     system_instruction: String,
     llm_runtime: RwLock<AgentLlmRuntime>,
-    tools: Vec<Box<dyn AgentTool + Send + Sync>>,
+    tools: RwLock<Vec<Arc<dyn AgentTool + Send + Sync>>>,
 }
 
 struct AgentLlmRuntime {
@@ -55,14 +55,14 @@ impl Agent {
         system_instruction: String,
         model: String,
         llm_client: Client<OpenAIConfig>,
-        tools: Vec<Box<dyn AgentTool + Send + Sync>>,
+        tools: Vec<Arc<dyn AgentTool + Send + Sync>>,
     ) -> Self {
         Self {
             id,
             name,
             system_instruction,
             llm_runtime: RwLock::new(AgentLlmRuntime { model, llm_client }),
-            tools,
+            tools: RwLock::new(tools),
         }
     }
 
@@ -110,6 +110,17 @@ impl Agent {
         Ok(())
     }
 
+    pub fn set_tools(&self, tools: Vec<Arc<dyn AgentTool + Send + Sync>>) -> anyhow::Result<()> {
+        let mut current_tools = self
+            .tools
+            .write()
+            .map_err(|_| anyhow::anyhow!("agent tools lock is poisoned"))?;
+
+        *current_tools = tools;
+
+        Ok(())
+    }
+
     pub async fn call(
         &self,
         messages: Vec<ChatCompletionRequestMessage>,
@@ -135,6 +146,7 @@ impl Agent {
         callback: &dyn AgentStreamCallback,
     ) -> anyhow::Result<AgentResponse> {
         let mut final_response = AgentResponse::default();
+        let mut completed = false;
 
         for _ in 0..MAX_TOOL_ITERATIONS {
             let response = self.stream_once(&messages, callback).await?;
@@ -142,6 +154,11 @@ impl Agent {
             match response.finish_reason {
                 Some(FinishReason::ToolCalls) => {
                     let tool_calls = merge_tool_call_chunks(&response.tool_calls);
+                    if tool_calls.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "model returned a tool call without a function name"
+                        ));
+                    }
 
                     let assistant_msg = ChatCompletionRequestAssistantMessageArgs::default()
                         .tool_calls(tool_calls.clone())
@@ -171,13 +188,18 @@ impl Agent {
                 }
                 _ => {
                     final_response = response;
+                    completed = true;
                     break;
                 }
             }
         }
 
-        // Accumulate usage across iterations is already handled since final_response
-        // is set to the last response. For multi-iteration, merge usage.
+        if !completed {
+            return Err(anyhow::anyhow!(
+                "stopped after {MAX_TOOL_ITERATIONS} tool-call rounds without a final response"
+            ));
+        }
+
         callback.on_complete(&final_response.content).await;
         Ok(final_response)
     }
@@ -223,9 +245,13 @@ impl Agent {
     async fn execute_tool(&self, name: &str, arguments: &str) -> anyhow::Result<String> {
         let tool = self
             .tools
+            .read()
+            .map_err(|_| anyhow::anyhow!("agent tools lock is poisoned"))?
             .iter()
             .find(|t| t.name() == name)
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("unknown tool: {name}"))?;
+
         tool.execute(arguments).await
     }
 
@@ -255,9 +281,13 @@ impl Agent {
         let mut request = CreateChatCompletionRequestArgs::default();
         request.model(model).messages(request_messages);
 
-        if !self.tools.is_empty() {
-            let chat_tools: Vec<ChatCompletionTool> = self
-                .tools
+        let tools = self
+            .tools
+            .read()
+            .map_err(|_| anyhow::anyhow!("agent tools lock is poisoned"))?;
+
+        if !tools.is_empty() {
+            let chat_tools: Vec<ChatCompletionTool> = tools
                 .iter()
                 .map(|tool| {
                     let parameters: Option<serde_json::Value> =
@@ -275,6 +305,7 @@ impl Agent {
                 .collect();
             request.tools(chat_tools);
         }
+        drop(tools);
 
         if stream {
             request
@@ -349,7 +380,7 @@ fn merge_tool_call_chunks(
 
         if let Some(func) = &chunk.function {
             if let Some(name) = &func.name {
-                entry.function.name.clone_from(name);
+                merge_tool_name(&mut entry.function.name, name);
             }
             if let Some(args) = &func.arguments {
                 entry.function.arguments.push_str(args);
@@ -357,5 +388,21 @@ fn merge_tool_call_chunks(
         }
     }
 
-    merged.into_values().collect()
+    merged
+        .into_values()
+        .filter(|tool_call| !tool_call.function.name.trim().is_empty())
+        .collect()
+}
+
+fn merge_tool_name(current: &mut String, next: &str) {
+    if next.is_empty() {
+        return;
+    }
+
+    if current.is_empty() || next.starts_with(current.as_str()) {
+        current.clear();
+        current.push_str(next);
+    } else if !current.ends_with(next) {
+        current.push_str(next);
+    }
 }

@@ -2,6 +2,7 @@
 data.db
 mcp-servers.json
 preference/llm-provider.json
+preference/mcp-servers.json
 .env
 .env.*
 !.env.example
