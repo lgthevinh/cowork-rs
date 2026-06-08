@@ -10,12 +10,10 @@ use std::sync::{
 use async_openai::types::{ChatCompletionRequestMessage, CompletionUsage};
 use iced::futures::{SinkExt, channel::mpsc};
 use iced::widget::{
-    button, column, container, markdown, mouse_area, operation, responsive, row, stack, text,
-    text_editor,
+    button, column, container, markdown, mouse_area, operation, row, stack, text, text_editor,
 };
 use iced::{
-    Element, Event, Length, Size, Subscription, Task, alignment, application, event, font, mouse,
-    stream,
+    Element, Event, Length, Subscription, Task, alignment, application, event, font, mouse, stream,
 };
 use iced_fonts::{OCTICONS_FONT_BYTES, octicons};
 use std::{path::PathBuf, time::Duration};
@@ -47,9 +45,6 @@ const DEFAULT_SIDEBAR_WIDTH: f32 = 280.0;
 const MIN_SIDEBAR_WIDTH: f32 = 220.0;
 const MAX_SIDEBAR_WIDTH: f32 = 420.0;
 const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
-const CHAT_LANE_MAX_WIDTH: f32 = 820.0;
-const TOP_BAR_COMPACT_WIDTH: f32 = 640.0;
-const TOP_BAR_ICON_ONLY_WIDTH: f32 = 780.0;
 const EMOJI_FONT_ENV: &str = "COWORK_EMOJI_FONT";
 const EMOJI_FONT_CANDIDATES: &[&str] = &[
     "assets/fonts/emoji.ttf",
@@ -1280,74 +1275,32 @@ fn top_bar<'a>(
     session_model: &'a str,
     is_waiting_for_agent: bool,
 ) -> Element<'a, Message> {
-    responsive(move |size| {
-        responsive_top_bar(session_title, session_model, is_waiting_for_agent, size)
-    })
-    .height(Length::Shrink)
-    .into()
-}
-
-fn responsive_top_bar<'a>(
-    session_title: &'a str,
-    session_model: &'a str,
-    is_waiting_for_agent: bool,
-    size: Size,
-) -> Element<'a, Message> {
     let status = if is_waiting_for_agent {
         "Responding"
     } else {
         "Ready"
     };
-    let bar_width = size.width.min(CHAT_LANE_MAX_WIDTH);
-    let is_compact = bar_width < TOP_BAR_COMPACT_WIDTH;
-    let is_icon_only = bar_width < TOP_BAR_ICON_ONLY_WIDTH;
-
-    if is_compact {
-        return top_bar_shell(
-            column![
-                top_bar_title(session_title, session_model, true),
-                row![top_bar_status(status), top_bar_settings_button(false)]
-                    .spacing(8)
-                    .align_y(alignment::Vertical::Center),
-            ]
-            .spacing(8)
-            .width(Length::Fill)
-            .into(),
-        );
-    }
 
     let content = row![
-        top_bar_title(session_title, session_model, false),
+        top_bar_title(session_title, session_model),
         top_bar_status(status),
-        top_bar_settings_button(!is_icon_only),
+        top_bar_settings_button(),
     ]
     .spacing(12)
     .align_y(alignment::Vertical::Center);
 
-    top_bar_shell(content.into())
-}
-
-fn top_bar_shell<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
-    let bar = container(content)
+    container(content)
         .width(Length::Fill)
-        .max_width(CHAT_LANE_MAX_WIDTH)
+        .height(58)
         .padding([10, 18])
-        .style(theme::top_bar);
-
-    container(bar)
-        .width(Length::Fill)
-        .align_x(alignment::Horizontal::Center)
+        .style(theme::top_bar)
         .into()
 }
 
-fn top_bar_title<'a>(
-    session_title: &'a str,
-    session_model: &'a str,
-    is_compact: bool,
-) -> Element<'a, Message> {
+fn top_bar_title<'a>(session_title: &'a str, session_model: &'a str) -> Element<'a, Message> {
     column![
         text(session_title)
-            .size(if is_compact { 15 } else { 16 })
+            .size(16)
             .width(Length::Fill)
             .wrapping(text::Wrapping::WordOrGlyph),
         text(session_model)
@@ -1368,21 +1321,16 @@ fn top_bar_status<'a>(status: &'a str) -> Element<'a, Message> {
         .into()
 }
 
-fn top_bar_settings_button<'a>(show_label: bool) -> Element<'a, Message> {
-    let content: Element<'a, Message> = if show_label {
+fn top_bar_settings_button<'a>() -> Element<'a, Message> {
+    button(
         row![octicons::gear().size(14), text("Settings").size(13)]
             .spacing(7)
-            .align_y(alignment::Vertical::Center)
-            .into()
-    } else {
-        octicons::gear().size(14).into()
-    };
-
-    button(content)
-        .on_press(Message::OpenSettings)
-        .padding(if show_label { [8, 12] } else { [8, 10] })
-        .style(theme::quiet_button)
-        .into()
+            .align_y(alignment::Vertical::Center),
+    )
+    .on_press(Message::OpenSettings)
+    .padding([8, 12])
+    .style(theme::quiet_button)
+    .into()
 }
 
 fn sidebar_resize_handle<'a>() -> Element<'a, Message> {
