@@ -16,7 +16,6 @@ pub(in crate::app) fn settings_dialog<'a>(
     llm_default_model: &'a str,
     llm_models: &'a str,
     is_llm_provider_changing: bool,
-    llm_config_status: Option<String>,
     message_count: usize,
     db_path: String,
     is_icon_font_loaded: bool,
@@ -29,7 +28,6 @@ pub(in crate::app) fn settings_dialog<'a>(
     mcp_tool_count: usize,
     mcp_config_editor: &'a text_editor::Content,
     is_mcp_config_changing: bool,
-    mcp_config_status: Option<String>,
 ) -> Element<'a, Message> {
     let dialog = container(
         row![
@@ -44,7 +42,6 @@ pub(in crate::app) fn settings_dialog<'a>(
                 llm_default_model,
                 llm_models,
                 is_llm_provider_changing,
-                llm_config_status,
                 message_count,
                 db_path,
                 is_icon_font_loaded,
@@ -57,7 +54,6 @@ pub(in crate::app) fn settings_dialog<'a>(
                 mcp_tool_count,
                 mcp_config_editor,
                 is_mcp_config_changing,
-                mcp_config_status,
             ),
         ]
         .height(Length::Fill),
@@ -150,7 +146,6 @@ fn settings_content<'a>(
     llm_default_model: &'a str,
     llm_models: &'a str,
     is_llm_provider_changing: bool,
-    llm_config_status: Option<String>,
     message_count: usize,
     db_path: String,
     is_icon_font_loaded: bool,
@@ -163,7 +158,6 @@ fn settings_content<'a>(
     mcp_tool_count: usize,
     mcp_config_editor: &'a text_editor::Content,
     is_mcp_config_changing: bool,
-    mcp_config_status: Option<String>,
 ) -> Element<'a, Message> {
     let content = match active_tab {
         SettingsTab::General => general_tab(
@@ -181,7 +175,6 @@ fn settings_content<'a>(
             llm_default_model,
             llm_models,
             is_llm_provider_changing,
-            llm_config_status,
             is_waiting_for_agent,
         ),
         SettingsTab::Tools => tools_tab(
@@ -190,7 +183,6 @@ fn settings_content<'a>(
             mcp_tool_count,
             mcp_config_editor,
             is_mcp_config_changing,
-            mcp_config_status,
             is_waiting_for_agent,
         ),
         SettingsTab::Storage => storage_tab(message_count, db_path),
@@ -277,7 +269,6 @@ fn agent_tab<'a>(
     llm_default_model: &'a str,
     llm_models: &'a str,
     is_llm_provider_changing: bool,
-    llm_config_status: Option<String>,
     is_waiting_for_agent: bool,
 ) -> Element<'a, Message> {
     if is_llm_provider_changing {
@@ -288,12 +279,11 @@ fn agent_tab<'a>(
             llm_api_key,
             llm_default_model,
             llm_models,
-            llm_config_status,
             is_waiting_for_agent,
         );
     }
 
-    let mut rows = vec![
+    let rows = vec![
         detail_row("Preset", "Default"),
         detail_row("Active model", session_model),
         detail_row(
@@ -327,10 +317,6 @@ fn agent_tab<'a>(
         .into(),
     ];
 
-    if let Some(status) = llm_config_status {
-        rows.push(detail_row("Config", status));
-    }
-
     settings_panel(rows)
 }
 
@@ -341,7 +327,6 @@ fn agent_change_tab<'a>(
     llm_api_key: &'a str,
     llm_default_model: &'a str,
     llm_models: &'a str,
-    llm_config_status: Option<String>,
     is_waiting_for_agent: bool,
 ) -> Element<'a, Message> {
     let save_button = button(icon_label(octicons::check().size(14), "Save changes"))
@@ -353,7 +338,7 @@ fn agent_change_tab<'a>(
         save_button.on_press(Message::SaveLlmProviderConfig)
     };
 
-    let mut rows = vec![
+    let rows = vec![
         detail_row("Active model", session_model),
         detail_row(
             "Status",
@@ -405,10 +390,6 @@ fn agent_change_tab<'a>(
         .into(),
     ];
 
-    if let Some(status) = llm_config_status {
-        rows.push(detail_row("Config", status));
-    }
-
     settings_panel(rows)
 }
 
@@ -426,7 +407,6 @@ fn tools_tab<'a>(
     mcp_tool_count: usize,
     mcp_config_editor: &'a text_editor::Content,
     is_mcp_config_changing: bool,
-    mcp_config_status: Option<String>,
     is_waiting_for_agent: bool,
 ) -> Element<'a, Message> {
     if is_mcp_config_changing {
@@ -435,7 +415,6 @@ fn tools_tab<'a>(
             mcp_server_count,
             mcp_tool_count,
             mcp_config_editor,
-            mcp_config_status,
             is_waiting_for_agent,
         );
     }
@@ -446,7 +425,7 @@ fn tools_tab<'a>(
         "No servers connected".to_owned()
     };
 
-    let mut rows = vec![
+    let rows = vec![
         detail_row("Runtime", "Active"),
         detail_row("Config file", "preference/mcp-servers.json"),
         detail_row(
@@ -469,10 +448,6 @@ fn tools_tab<'a>(
         .into(),
     ];
 
-    if let Some(status) = mcp_config_status {
-        rows.push(detail_row("Config", status));
-    }
-
     settings_panel(rows)
 }
 
@@ -481,7 +456,6 @@ fn tools_change_tab<'a>(
     mcp_server_count: usize,
     mcp_tool_count: usize,
     mcp_config_editor: &'a text_editor::Content,
-    mcp_config_status: Option<String>,
     is_waiting_for_agent: bool,
 ) -> Element<'a, Message> {
     let save_button = button(icon_label(octicons::check().size(14), "Save changes"))
@@ -493,7 +467,7 @@ fn tools_change_tab<'a>(
         save_button.on_press(Message::SaveMcpServersConfig)
     };
 
-    let mut rows = vec![
+    let rows = vec![
         detail_row("Config file", "preference/mcp-servers.json"),
         detail_row(
             "Configured servers",
@@ -515,10 +489,6 @@ fn tools_change_tab<'a>(
         .spacing(8)
         .into(),
     ];
-
-    if let Some(status) = mcp_config_status {
-        rows.push(detail_row("Config", status));
-    }
 
     settings_panel(rows)
 }

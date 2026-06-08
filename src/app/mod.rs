@@ -9,15 +9,22 @@ use std::sync::{
 
 use async_openai::types::{ChatCompletionRequestMessage, CompletionUsage};
 use iced::futures::{SinkExt, channel::mpsc};
-use iced::widget::{button, column, container, markdown, operation, row, stack, text, text_editor};
-use iced::{Element, Length, Task, alignment, application, font, stream};
+use iced::widget::{
+    button, column, container, markdown, mouse_area, operation, responsive, row, stack, text,
+    text_editor,
+};
+use iced::{
+    Element, Event, Length, Size, Subscription, Task, alignment, application, event, font, mouse,
+    stream,
+};
 use iced_fonts::{OCTICONS_FONT_BYTES, octicons};
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use crate::agent::{
     agent::AgentStreamCallback,
     agent_orchestrator::{self, AgentOrchestrator},
 };
+use crate::app::components::{Toast, ToastLevel};
 use crate::record::record_file::RecordFile;
 use crate::record::{RecordFilter, RecordSqlite};
 use crate::storage::chat_record::{
@@ -34,6 +41,15 @@ use crate::storage::mcp_servers_config::{
 const INITIAL_RECENT_SESSION_COUNT: usize = 5;
 const RECENT_SESSION_PAGE_SIZE: usize = 5;
 const EMPTY_AGENT_RESPONSE: &str = "The agent returned an empty response.";
+const TOAST_DURATION: Duration = Duration::from_secs(4);
+const MAX_TOASTS: usize = 4;
+const DEFAULT_SIDEBAR_WIDTH: f32 = 280.0;
+const MIN_SIDEBAR_WIDTH: f32 = 220.0;
+const MAX_SIDEBAR_WIDTH: f32 = 420.0;
+const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
+const CHAT_LANE_MAX_WIDTH: f32 = 820.0;
+const TOP_BAR_COMPACT_WIDTH: f32 = 640.0;
+const TOP_BAR_ICON_ONLY_WIDTH: f32 = 780.0;
 const EMOJI_FONT_ENV: &str = "COWORK_EMOJI_FONT";
 const EMOJI_FONT_CANDIDATES: &[&str] = &[
     "assets/fonts/emoji.ttf",
@@ -73,6 +89,7 @@ pub fn run(db: RecordSqlite, agent_orchestrator: AgentOrchestrator) -> iced::Res
     )
     .title(theme::title)
     .theme(theme::theme)
+    .subscription(CoworkApp::subscription)
     .window_size(theme::WINDOW_SIZE)
     .centered()
     .run()
@@ -119,6 +136,11 @@ pub(super) enum Message {
         result: String,
     },
     ToggleToolCallDetail(usize),
+    SidebarResizeStarted,
+    SidebarResizeDragged(f32),
+    SidebarResizeFinished,
+    ToastDismissed(u64),
+    ToastExpired(u64),
     MarkdownLinkClicked(markdown::Uri),
 }
 
@@ -305,6 +327,8 @@ struct CoworkApp {
     draft: String,
     recent_sessions: Vec<SessionRecord>,
     visible_session_count: usize,
+    sidebar_width: f32,
+    is_resizing_sidebar: bool,
     is_settings_open: bool,
     settings_tab: SettingsTab,
     is_icon_font_loaded: bool,
@@ -317,13 +341,17 @@ struct CoworkApp {
     llm_default_model: String,
     llm_models: String,
     is_llm_provider_changing: bool,
+    #[allow(dead_code)]
     llm_config_status: Option<String>,
     mcp_config_editor: text_editor::Content,
     is_mcp_config_changing: bool,
+    #[allow(dead_code)]
     mcp_config_status: Option<String>,
     messages: Vec<ChatMessage>,
     streaming_assistant_index: Option<usize>,
     is_waiting_for_agent: bool,
+    toasts: Vec<Toast>,
+    next_toast_id: u64,
     mcp_configured_server_count: usize,
     mcp_server_count: usize,
     mcp_tool_count: usize,
@@ -375,6 +403,8 @@ impl CoworkApp {
             draft: String::new(),
             recent_sessions: Vec::new(),
             visible_session_count: INITIAL_RECENT_SESSION_COUNT,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            is_resizing_sidebar: false,
             is_settings_open: false,
             settings_tab: SettingsTab::Agent,
             is_icon_font_loaded: false,
@@ -394,6 +424,8 @@ impl CoworkApp {
             messages: Vec::new(),
             streaming_assistant_index: None,
             is_waiting_for_agent: false,
+            toasts: Vec::new(),
+            next_toast_id: 1,
             mcp_configured_server_count,
             mcp_server_count,
             mcp_tool_count,
@@ -499,18 +531,9 @@ impl CoworkApp {
                 self.llm_config_status = None;
                 Task::none()
             }
-            Message::CancelLlmProviderConfigChange => {
-                self.cancel_llm_provider_config_change();
-                Task::none()
-            }
-            Message::SaveLlmProviderConfig => {
-                self.save_llm_provider_config();
-                Task::none()
-            }
-            Message::ReloadLlmProviderConfig => {
-                self.reload_llm_provider_config();
-                Task::none()
-            }
+            Message::CancelLlmProviderConfigChange => self.cancel_llm_provider_config_change(),
+            Message::SaveLlmProviderConfig => self.save_llm_provider_config(),
+            Message::ReloadLlmProviderConfig => self.reload_llm_provider_config(),
             Message::McpServersConfigEdited(action) => {
                 self.mcp_config_editor.perform(action);
                 self.mcp_config_status = None;
@@ -521,18 +544,9 @@ impl CoworkApp {
                 self.mcp_config_status = None;
                 Task::none()
             }
-            Message::CancelMcpServersConfigChange => {
-                self.cancel_mcp_servers_config_change();
-                Task::none()
-            }
-            Message::SaveMcpServersConfig => {
-                self.save_mcp_servers_config();
-                Task::none()
-            }
-            Message::ReloadMcpServersConfig => {
-                self.reload_mcp_servers_config();
-                Task::none()
-            }
+            Message::CancelMcpServersConfigChange => self.cancel_mcp_servers_config_change(),
+            Message::SaveMcpServersConfig => self.save_mcp_servers_config(),
+            Message::ReloadMcpServersConfig => self.reload_mcp_servers_config(),
             Message::IconFontLoaded(result) => {
                 self.is_icon_font_loaded = result.is_ok();
 
@@ -687,7 +701,10 @@ impl CoworkApp {
                     "Agent request failed: {error}"
                 )));
 
-                Task::none()
+                Task::batch([
+                    scroll_to_bottom(),
+                    self.push_toast(ToastLevel::Error, format!("Agent request failed: {error}")),
+                ])
             }
             Message::ChatStreamUsage(usage) => {
                 let _usage = usage;
@@ -723,6 +740,25 @@ impl CoworkApp {
                     message.is_tool_detail_open = !message.is_tool_detail_open;
                 }
 
+                Task::none()
+            }
+            Message::SidebarResizeStarted => {
+                self.is_resizing_sidebar = true;
+                Task::none()
+            }
+            Message::SidebarResizeDragged(position_x) => {
+                if self.is_resizing_sidebar {
+                    self.sidebar_width = position_x.clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH);
+                }
+
+                Task::none()
+            }
+            Message::SidebarResizeFinished => {
+                self.is_resizing_sidebar = false;
+                Task::none()
+            }
+            Message::ToastDismissed(id) | Message::ToastExpired(id) => {
+                self.toasts.retain(|toast| toast.id != id);
                 Task::none()
             }
             Message::MarkdownLinkClicked(uri) => {
@@ -783,7 +819,7 @@ impl CoworkApp {
         }
     }
 
-    fn save_llm_provider_config(&mut self) {
+    fn save_llm_provider_config(&mut self) -> Task<Message> {
         let config = self.llm_provider_config_from_form();
         let result = (|| -> anyhow::Result<()> {
             config.validate_resolved()?;
@@ -798,27 +834,37 @@ impl CoworkApp {
                 self.session_model = self.active_agent_model();
                 self.is_llm_provider_changing = false;
                 self.llm_config_status = Some(String::from("Saved"));
+                self.push_toast(ToastLevel::Success, String::from("Provider settings saved"))
             }
             Err(error) => {
                 self.llm_config_status = Some(format!("Save failed: {error}"));
+                self.push_toast(
+                    ToastLevel::Error,
+                    format!("Failed to save provider settings: {error}"),
+                )
             }
         }
     }
 
-    fn cancel_llm_provider_config_change(&mut self) {
+    fn cancel_llm_provider_config_change(&mut self) -> Task<Message> {
         match load_llm_provider_form() {
             Ok(form) => {
                 self.apply_llm_provider_form(form);
                 self.is_llm_provider_changing = false;
                 self.llm_config_status = None;
+                Task::none()
             }
             Err(error) => {
                 self.llm_config_status = Some(format!("Cancel failed: {error}"));
+                self.push_toast(
+                    ToastLevel::Error,
+                    format!("Failed to reload provider settings: {error}"),
+                )
             }
         }
     }
 
-    fn reload_llm_provider_config(&mut self) {
+    fn reload_llm_provider_config(&mut self) -> Task<Message> {
         let result = (|| -> anyhow::Result<LlmProviderForm> {
             let form = load_llm_provider_form()?;
             self.agent_orchestrator.load_provider_config()?;
@@ -831,14 +877,19 @@ impl CoworkApp {
                 self.session_model = self.active_agent_model();
                 self.is_llm_provider_changing = false;
                 self.llm_config_status = Some(String::from("Reloaded"));
+                self.push_toast(ToastLevel::Info, String::from("Provider settings reloaded"))
             }
             Err(error) => {
                 self.llm_config_status = Some(format!("Reload failed: {error}"));
+                self.push_toast(
+                    ToastLevel::Error,
+                    format!("Failed to reload provider settings: {error}"),
+                )
             }
         }
     }
 
-    fn save_mcp_servers_config(&mut self) {
+    fn save_mcp_servers_config(&mut self) -> Task<Message> {
         let result = (|| -> anyhow::Result<McpServersConfig> {
             let config: McpServersConfig = serde_json::from_str(&self.mcp_config_editor.text())?;
             let record_file = RecordFile::open(MCP_SERVERS_CONFIG_PATH)?;
@@ -852,27 +903,37 @@ impl CoworkApp {
                 self.apply_mcp_servers_config(config);
                 self.is_mcp_config_changing = false;
                 self.mcp_config_status = Some(String::from("Saved"));
+                self.push_toast(ToastLevel::Success, String::from("Tools settings saved"))
             }
             Err(error) => {
                 self.mcp_config_status = Some(format!("Save failed: {error}"));
+                self.push_toast(
+                    ToastLevel::Error,
+                    format!("Failed to save Tools settings: {error}"),
+                )
             }
         }
     }
 
-    fn cancel_mcp_servers_config_change(&mut self) {
+    fn cancel_mcp_servers_config_change(&mut self) -> Task<Message> {
         match load_mcp_servers_config_json() {
             Ok(config_json) => {
                 self.mcp_config_editor = text_editor::Content::with_text(&config_json);
                 self.is_mcp_config_changing = false;
                 self.mcp_config_status = None;
+                Task::none()
             }
             Err(error) => {
                 self.mcp_config_status = Some(format!("Cancel failed: {error}"));
+                self.push_toast(
+                    ToastLevel::Error,
+                    format!("Failed to reload Tools settings: {error}"),
+                )
             }
         }
     }
 
-    fn reload_mcp_servers_config(&mut self) {
+    fn reload_mcp_servers_config(&mut self) -> Task<Message> {
         let result = (|| -> anyhow::Result<McpServersConfig> {
             let config = self.agent_orchestrator.reload_mcp_servers_config()?;
             Ok(config)
@@ -883,9 +944,14 @@ impl CoworkApp {
                 self.apply_mcp_servers_config(config);
                 self.is_mcp_config_changing = false;
                 self.mcp_config_status = Some(String::from("Reloaded"));
+                self.push_toast(ToastLevel::Info, String::from("Tools settings reloaded"))
             }
             Err(error) => {
                 self.mcp_config_status = Some(format!("Reload failed: {error}"));
+                self.push_toast(
+                    ToastLevel::Error,
+                    format!("Failed to reload Tools settings: {error}"),
+                )
             }
         }
     }
@@ -1111,27 +1177,35 @@ impl CoworkApp {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let shell = container(column![
+        let chat_column = column![
             top_bar(
                 &self.session_title,
                 &self.session_model,
                 self.is_waiting_for_agent
             ),
+            components::chat_area(&self.messages, &self.draft, self.is_waiting_for_agent),
+        ]
+        .height(Length::Fill)
+        .width(Length::Fill);
+
+        let shell = container(
             row![
                 components::sidebar(
                     &self.session_id,
                     &self.recent_sessions,
                     self.visible_session_count,
+                    self.sidebar_width,
                 ),
-                components::chat_area(&self.messages, &self.draft, self.is_waiting_for_agent),
+                sidebar_resize_handle(),
+                chat_column,
             ]
             .height(Length::Fill),
-        ])
+        )
         .width(Length::Fill)
         .height(Length::Fill)
         .style(theme::app_background);
 
-        if self.is_settings_open {
+        let base: Element<'_, Message> = if self.is_settings_open {
             let llm_api_key_status = self.llm_api_key_status();
 
             stack![
@@ -1146,7 +1220,6 @@ impl CoworkApp {
                     &self.llm_default_model,
                     &self.llm_models,
                     self.is_llm_provider_changing,
-                    self.llm_config_status.clone(),
                     self.messages.len(),
                     self.db_path.display().to_string(),
                     self.is_icon_font_loaded,
@@ -1159,7 +1232,6 @@ impl CoworkApp {
                     self.mcp_tool_count,
                     &self.mcp_config_editor,
                     self.is_mcp_config_changing,
-                    self.mcp_config_status.clone(),
                 ),
             ]
             .width(Length::Fill)
@@ -1167,6 +1239,38 @@ impl CoworkApp {
             .into()
         } else {
             shell.into()
+        };
+
+        stack![base, components::toast_overlay(&self.toasts)]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    }
+
+    fn push_toast(&mut self, level: ToastLevel, message: impl Into<String>) -> Task<Message> {
+        let id = self.next_toast_id;
+        self.next_toast_id += 1;
+        let created_at = now_millis();
+        let expires_at = Some(created_at + TOAST_DURATION.as_millis() as i64);
+
+        self.toasts
+            .push(Toast::new(id, level, message, created_at, expires_at));
+
+        if self.toasts.len() > MAX_TOASTS {
+            self.toasts.remove(0);
+        }
+
+        Task::perform(
+            expire_toast_after(TOAST_DURATION, id),
+            Message::ToastExpired,
+        )
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        if self.is_resizing_sidebar {
+            event::listen_with(sidebar_resize_events)
+        } else {
+            Subscription::none()
         }
     }
 }
@@ -1176,42 +1280,139 @@ fn top_bar<'a>(
     session_model: &'a str,
     is_waiting_for_agent: bool,
 ) -> Element<'a, Message> {
+    responsive(move |size| {
+        responsive_top_bar(session_title, session_model, is_waiting_for_agent, size)
+    })
+    .height(Length::Shrink)
+    .into()
+}
+
+fn responsive_top_bar<'a>(
+    session_title: &'a str,
+    session_model: &'a str,
+    is_waiting_for_agent: bool,
+    size: Size,
+) -> Element<'a, Message> {
     let status = if is_waiting_for_agent {
         "Responding"
     } else {
         "Ready"
     };
+    let bar_width = size.width.min(CHAT_LANE_MAX_WIDTH);
+    let is_compact = bar_width < TOP_BAR_COMPACT_WIDTH;
+    let is_icon_only = bar_width < TOP_BAR_ICON_ONLY_WIDTH;
 
-    container(
-        row![
+    if is_compact {
+        return top_bar_shell(
             column![
-                text(session_title).size(16),
-                text(session_model)
-                    .size(12)
-                    .color(theme::muted_text_color()),
+                top_bar_title(session_title, session_model, true),
+                row![top_bar_status(status), top_bar_settings_button(false)]
+                    .spacing(8)
+                    .align_y(alignment::Vertical::Center),
             ]
-            .spacing(2)
-            .width(Length::Fill),
-            container(text(status).size(13))
-                .padding([6, 10])
-                .style(theme::status_pill),
-            button(
-                row![octicons::gear().size(14), text("Settings").size(13)]
-                    .spacing(7)
-                    .align_y(alignment::Vertical::Center)
-            )
-            .on_press(Message::OpenSettings)
-            .padding([8, 12])
-            .style(theme::quiet_button),
-        ]
-        .spacing(12)
-        .align_y(alignment::Vertical::Center),
-    )
+            .spacing(8)
+            .width(Length::Fill)
+            .into(),
+        );
+    }
+
+    let content = row![
+        top_bar_title(session_title, session_model, false),
+        top_bar_status(status),
+        top_bar_settings_button(!is_icon_only),
+    ]
+    .spacing(12)
+    .align_y(alignment::Vertical::Center);
+
+    top_bar_shell(content.into())
+}
+
+fn top_bar_shell<'a>(content: Element<'a, Message>) -> Element<'a, Message> {
+    let bar = container(content)
+        .width(Length::Fill)
+        .max_width(CHAT_LANE_MAX_WIDTH)
+        .padding([10, 18])
+        .style(theme::top_bar);
+
+    container(bar)
+        .width(Length::Fill)
+        .align_x(alignment::Horizontal::Center)
+        .into()
+}
+
+fn top_bar_title<'a>(
+    session_title: &'a str,
+    session_model: &'a str,
+    is_compact: bool,
+) -> Element<'a, Message> {
+    column![
+        text(session_title)
+            .size(if is_compact { 15 } else { 16 })
+            .width(Length::Fill)
+            .wrapping(text::Wrapping::WordOrGlyph),
+        text(session_model)
+            .size(12)
+            .width(Length::Fill)
+            .wrapping(text::Wrapping::WordOrGlyph)
+            .color(theme::muted_text_color()),
+    ]
+    .spacing(2)
     .width(Length::Fill)
-    .height(58)
-    .padding([10, 18])
-    .style(theme::top_bar)
     .into()
+}
+
+fn top_bar_status<'a>(status: &'a str) -> Element<'a, Message> {
+    container(text(status).size(13))
+        .padding([6, 10])
+        .style(theme::status_pill)
+        .into()
+}
+
+fn top_bar_settings_button<'a>(show_label: bool) -> Element<'a, Message> {
+    let content: Element<'a, Message> = if show_label {
+        row![octicons::gear().size(14), text("Settings").size(13)]
+            .spacing(7)
+            .align_y(alignment::Vertical::Center)
+            .into()
+    } else {
+        octicons::gear().size(14).into()
+    };
+
+    button(content)
+        .on_press(Message::OpenSettings)
+        .padding(if show_label { [8, 12] } else { [8, 10] })
+        .style(theme::quiet_button)
+        .into()
+}
+
+fn sidebar_resize_handle<'a>() -> Element<'a, Message> {
+    mouse_area(
+        container("")
+            .width(SIDEBAR_RESIZE_HANDLE_WIDTH)
+            .height(Length::Fill)
+            .style(theme::sidebar_resize_handle),
+    )
+    .on_press(Message::SidebarResizeStarted)
+    .on_release(Message::SidebarResizeFinished)
+    .interaction(mouse::Interaction::ResizingHorizontally)
+    .into()
+}
+
+fn sidebar_resize_events(
+    event: Event,
+    _status: event::Status,
+    _window: iced::window::Id,
+) -> Option<Message> {
+    match event {
+        Event::Mouse(mouse::Event::CursorMoved { position }) => {
+            Some(Message::SidebarResizeDragged(position.x))
+        }
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            Some(Message::SidebarResizeFinished)
+        }
+        Event::Mouse(mouse::Event::CursorLeft) => Some(Message::SidebarResizeFinished),
+        _ => None,
+    }
 }
 
 fn chat_message_from_record(record: MessageRecord) -> ChatMessage {
@@ -1375,6 +1576,11 @@ fn title_from_message(message: &str) -> String {
     }
 
     title
+}
+
+async fn expire_toast_after(duration: Duration, id: u64) -> u64 {
+    tokio::time::sleep(duration).await;
+    id
 }
 
 fn normalized_visible_session_count(current: usize, total: usize) -> usize {

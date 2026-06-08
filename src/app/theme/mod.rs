@@ -63,6 +63,13 @@ pub(in crate::app) fn sidebar(_: &Theme) -> container::Style {
     }
 }
 
+pub(in crate::app) fn sidebar_resize_handle(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(BORDER)),
+        ..container::Style::default()
+    }
+}
+
 pub(in crate::app) fn top_bar(_: &Theme) -> container::Style {
     container::Style {
         text_color: Some(TEXT),
@@ -300,6 +307,22 @@ pub(in crate::app) fn markdown_table_cell(_: &Theme) -> container::Style {
     }
 }
 
+pub(in crate::app) fn toast_info(_: &Theme) -> container::Style {
+    toast_style(Color::from_rgb8(0x3b, 0x82, 0xf6))
+}
+
+pub(in crate::app) fn toast_success(_: &Theme) -> container::Style {
+    toast_style(ACCENT)
+}
+
+pub(in crate::app) fn toast_warning(_: &Theme) -> container::Style {
+    toast_style(Color::from_rgb8(0xca, 0x8a, 0x04))
+}
+
+pub(in crate::app) fn toast_error(_: &Theme) -> container::Style {
+    toast_style(Color::from_rgb8(0xdc, 0x26, 0x26))
+}
+
 pub(in crate::app) fn markdown_code_block(_: &Theme) -> container::Style {
     container::Style {
         text_color: Some(TEXT),
@@ -459,6 +482,19 @@ pub(in crate::app) fn text_color() -> Color {
 
 pub(in crate::app) fn warning_text_color() -> Color {
     Color::from_rgb8(0x8a, 0x5a, 0x20)
+}
+
+fn toast_style(border_color: Color) -> container::Style {
+    container::Style {
+        text_color: Some(TEXT),
+        background: Some(Background::Color(PANEL)),
+        border: Border {
+            width: 1.0,
+            radius: 8.0.into(),
+            color: border_color,
+        },
+        ..container::Style::default()
+    }
 }
 
 fn soft_white_green() -> Theme {

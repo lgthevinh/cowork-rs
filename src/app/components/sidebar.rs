@@ -9,6 +9,7 @@ pub(in crate::app) fn sidebar<'a>(
     active_session_id: &'a str,
     recent_sessions: &'a [SessionRecord],
     visible_session_count: usize,
+    width: f32,
 ) -> Element<'a, Message> {
     container(
         column![
@@ -22,7 +23,7 @@ pub(in crate::app) fn sidebar<'a>(
         ]
         .spacing(14),
     )
-    .width(280)
+    .width(width)
     .height(Length::Fill)
     .padding(18)
     .style(theme::sidebar)
