@@ -2,11 +2,11 @@
 
 ## Overview
 
-Cowork RS is a local-first Rust desktop app for chatting with a built-in AI agent. It uses `iced` for the UI, OpenAI-compatible chat completions for the agent, MCP for tools, and SQLite for local persistence.
+Cowork RS is a local-first Rust desktop app for chatting with a built-in AI agent. It uses Tauri for the desktop shell, a React/TypeScript web UI for the frontend, OpenAI-compatible chat completions for the agent, MCP for tools, and SQLite for local persistence.
 
 ## Core Goals
 
-- Provide a native desktop chat UI using `iced`.
+- Provide a desktop chat UI using Tauri and a local web frontend.
 - Run a built-in AI agent backed by OpenAI chat completions.
 - Store chat sessions and messages locally in SQLite.
 - Keep agent definitions controlled in code through presets.
@@ -14,23 +14,25 @@ Cowork RS is a local-first Rust desktop app for chatting with a built-in AI agen
 
 ## Architecture
 
-- `src/app/`: iced UI state, components, and theme configuration.
+- `src/backend.rs`: Tauri-managed backend state and application service operations.
+- `src/commands.rs`: Tauri command handlers and frontend IPC boundary.
 - `src/agent/`: agent definition, presets, OpenAI orchestration, and tool traits.
 - `src/record/`: reusable local storage primitives such as `RecordSqlite`, `SqliteRecord`, `RecordSchema`, `RecordFilter`, and `RecordFile`.
 - `src/storage/`: app-specific persisted record types.
+- `web/`: React/TypeScript frontend built with Vite and loaded by Tauri.
 
-`src/main.rs` opens local storage, initializes schemas, creates the agent orchestrator, and launches the UI.
+`src/main.rs` initializes backend state, registers Tauri commands, and launches the Tauri desktop shell.
 
 ## Current Behavior
 
-On startup, the app opens `data.db` through `RecordSqlite`, creates the chat tables if needed, initializes the default agent preset, and launches the chat UI.
+On startup, the app opens `data.db` through `RecordSqlite`, creates the chat tables if needed, initializes the default agent preset, registers Tauri commands, and launches the chat UI.
 
-When the user sends a message, the UI:
+When the user sends a message, the frontend calls the Tauri `send_message` command. The backend:
 
-1. Adds the user message to the transcript.
+1. Receives the user message from the frontend.
 2. Persists the user message to SQLite.
 3. Calls OpenAI chat completion asynchronously.
-4. Adds the assistant response to the transcript.
+4. Streams tokens and tool-call events back to the frontend over Tauri IPC.
 5. Persists the assistant response to SQLite.
 
 ## Data Model

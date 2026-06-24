@@ -1,4 +1,4 @@
-.PHONY: check test fmt build install-cross build-linux-x86_64 build-linux-aarch64 build-linux-all
+.PHONY: check test fmt web-build dev build install-cross build-linux-x86_64 build-linux-aarch64 build-linux-all
 
 check:
 	cargo check
@@ -9,14 +9,20 @@ test:
 fmt:
 	cargo fmt
 
+web-build:
+	npm --prefix web run build
+
+dev:
+	npm run dev
+
 build:
-	cargo build --release
+	npm run build
 
 install-cross:
 	cargo install cross --locked
 
 build-linux-x86_64:
-	cargo build --release --target x86_64-unknown-linux-gnu
+	npm run build
 
 build-linux-aarch64:
 	cross build --release --target aarch64-unknown-linux-gnu
