@@ -1,0 +1,12 @@
+{
+  "name": "cowork-rs-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "web/node_modules/.bin/tauri dev",
+    "build": "web/node_modules/.bin/tauri build",
+    "build:debug": "web/node_modules/.bin/tauri build --debug",
+    "web:dev": "npm --prefix web run dev",
+    "web:build": "npm --prefix web run build"
+  }
+}

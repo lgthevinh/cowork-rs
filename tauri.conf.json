@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Cowork RS",
+  "version": "0.1.0",
+  "identifier": "dev.cowork.rs",
+  "build": {
+    "beforeDevCommand": "npm run dev --prefix web",
+    "beforeBuildCommand": "npm run build --prefix web",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Cowork RS",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 900,
+        "minHeight": 620
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all"
+  }
+}

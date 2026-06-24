@@ -1,5 +1,8 @@
 /target
 data.db
+gen/
+web/dist/
+web/node_modules/
 mcp-servers.json
 preference/llm-provider.json
 preference/mcp-servers.json

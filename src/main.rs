@@ -1,24 +1,29 @@
 mod agent;
-mod app;
+mod backend;
+mod commands;
 mod log;
 mod record;
 mod storage;
 
-use agent::agent_orchestrator;
-use storage::chat_record;
+use backend::CoworkBackend;
 
-fn main() -> iced::Result {
-    // init record storage
-    let db = record::RecordSqlite::open("data.db").expect("failed to open sqlite record storage");
-    db.init::<chat_record::SessionRecord>()
-        .expect("failed to initialize session schema");
-    db.init::<chat_record::MessageRecord>()
-        .expect("failed to initialize message schema");
+fn main() {
+    let backend = CoworkBackend::init().expect("failed to initialize Cowork backend");
 
-    // init agent orchestrator
-    let agent_orchestrator: agent_orchestrator::AgentOrchestrator =
-        agent_orchestrator::init().expect("failed to initialize agent orchestrator");
-
-    // init ui app
-    app::run(db, agent_orchestrator)
+    tauri::Builder::default()
+        .manage(backend)
+        .invoke_handler(tauri::generate_handler![
+            commands::bootstrap_app,
+            commands::load_session,
+            commands::new_session,
+            commands::delete_session,
+            commands::send_message,
+            commands::get_settings,
+            commands::save_provider_config,
+            commands::save_mcp_servers_config,
+            commands::reload_provider_config,
+            commands::reload_mcp_servers_config,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Cowork RS");
 }
